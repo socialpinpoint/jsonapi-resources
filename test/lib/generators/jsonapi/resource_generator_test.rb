@@ -2,9 +2,9 @@ require File.expand_path('../../../../test_helper', __FILE__)
 require 'generators/jsonapi/resource_generator'
 
 module Jsonapi
-  class ResourceGeneratorTest < Rails::Generators::TestCase
+  class ResourceGeneratorTest < ::Rails::Generators::TestCase
     tests ResourceGenerator
-    destination Rails.root.join('../resources')
+    destination ::Rails.root.join('../resources')
     setup :prepare_destination
     teardown :cleanup_destination_root
 

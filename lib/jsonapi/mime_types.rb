@@ -8,7 +8,7 @@ module JSONAPI
       Mime::Type.register JSONAPI::MEDIA_TYPE, :api_json
 
       # :nocov:
-      if Rails::VERSION::MAJOR >= 5
+      if ::Rails::VERSION::MAJOR >= 5
         parsers = ActionDispatch::Request.parameter_parsers.merge(
           Mime::Type.lookup(JSONAPI::MEDIA_TYPE).symbol => parser
         )

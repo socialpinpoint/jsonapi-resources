@@ -70,7 +70,7 @@ module JSONAPI
         }
 
         internal_server_error = JSONAPI::Exceptions::InternalServerError.new(e)
-        Rails.logger.error { "Internal Server Error: #{e.message} #{e.backtrace.join("\n")}" }
+        ::Rails.logger.error { "Internal Server Error: #{e.message} #{e.backtrace.join("\n")}" }
         return JSONAPI::ErrorsOperationResult.new(internal_server_error.errors[0].code, internal_server_error.errors)
       end
     end
@@ -79,7 +79,7 @@ module JSONAPI
       begin 
         callback.call(error)
       rescue => e
-        Rails.logger.error { "Error in error handling callback: #{e.message} #{e.backtrace.join("\n")}" }
+        ::Rails.logger.error { "Error in error handling callback: #{e.message} #{e.backtrace.join("\n")}" }
         internal_server_error = JSONAPI::Exceptions::InternalServerError.new(e)
         return JSONAPI::ErrorsOperationResult.new(internal_server_error.errors[0].code, internal_server_error.errors)
       end

@@ -1,5 +1,5 @@
 module Jsonapi
-  class ControllerGenerator < Rails::Generators::NamedBase
+  class ControllerGenerator < ::Rails::Generators::NamedBase
     source_root File.expand_path('../templates', __FILE__)
 
     def create_resource

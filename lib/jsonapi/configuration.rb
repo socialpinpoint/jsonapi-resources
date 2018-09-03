@@ -72,7 +72,7 @@ module JSONAPI
 
       # Whether or not to include exception backtraces in JSONAPI error
       # responses.  Defaults to `false` in production, and `true` otherwise.
-      self.include_backtraces_in_errors = !Rails.env.production?
+      self.include_backtraces_in_errors = !::Rails.env.production?
 
       # List of classes that should not be rescued by the operations processor.
       # For example, if you use Pundit for authorization, you might

@@ -2,9 +2,9 @@ require File.expand_path('../../../../test_helper', __FILE__)
 require 'generators/jsonapi/controller_generator'
 
 module Jsonapi
-  class ControllerGeneratorTest < Rails::Generators::TestCase
+  class ControllerGeneratorTest < ::Rails::Generators::TestCase
     tests ControllerGenerator
-    destination Rails.root.join('../controllers')
+    destination ::Rails.root.join('../controllers')
     setup :prepare_destination
     teardown :cleanup_destination_root
 
