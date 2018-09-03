@@ -240,7 +240,7 @@ module JSONAPI
           fail e
         else
           internal_server_error = JSONAPI::Exceptions::InternalServerError.new(e)
-          Rails.logger.error { "Internal Server Error: #{e.message} #{e.backtrace.join("\n")}" }
+          ::Rails.logger.error { "Internal Server Error: #{e.message} #{e.backtrace.join("\n")}" }
           render_errors(internal_server_error.errors)
         end
       end
@@ -266,7 +266,7 @@ module JSONAPI
             if self.respond_to? method
               send(method, error)
             else
-              Rails.logger.warn("#{method} not defined on #{self}, skipping error callback")
+              ::Rails.logger.warn("#{method} not defined on #{self}, skipping error callback")
             end
           end
         end.compact

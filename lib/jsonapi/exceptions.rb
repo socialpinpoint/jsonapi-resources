@@ -10,7 +10,7 @@ module JSONAPI
       end
 
       def errors
-        unless Rails.env.production?
+        unless ::Rails.env.production?
           meta = Hash.new
           meta[:exception] = exception.message
           meta[:backtrace] = exception.backtrace

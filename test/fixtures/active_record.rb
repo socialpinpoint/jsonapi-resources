@@ -322,7 +322,7 @@ class Post < ActiveRecord::Base
       errors.add(:title, "can't destroy me")
 
       # :nocov:
-      if Rails::VERSION::MAJOR >= 5
+      if ::Rails::VERSION::MAJOR >= 5
         throw(:abort)
       else
         return false
@@ -395,7 +395,7 @@ class Planet < ActiveRecord::Base
     # Pluto can't be a planet, so cancel the save
     if name.downcase == 'pluto'
       # :nocov:
-      if Rails::VERSION::MAJOR >= 5
+      if ::Rails::VERSION::MAJOR >= 5
         throw(:abort)
       else
         return false

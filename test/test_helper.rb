@@ -28,7 +28,7 @@ require File.expand_path('../helpers/value_matchers', __FILE__)
 require File.expand_path('../helpers/assertions', __FILE__)
 require File.expand_path('../helpers/functional_helpers', __FILE__)
 
-Rails.env = 'test'
+::Rails.env = 'test'
 
 I18n.load_path += Dir[File.expand_path("../../locales/*.yml", __FILE__)]
 I18n.enforce_available_locales = false
@@ -37,9 +37,9 @@ JSONAPI.configure do |config|
   config.json_key_format = :camelized_key
 end
 
-puts "Testing With RAILS VERSION #{Rails.version}"
+puts "Testing With RAILS VERSION #{::Rails.version}"
 
-class TestApp < Rails::Application
+class TestApp < ::Rails::Application
   config.eager_load = false
   config.root = File.dirname(__FILE__)
   config.session_store :cookie_store, key: 'session'
@@ -53,9 +53,9 @@ class TestApp < Rails::Application
   config.active_support.test_order = :random
 
   # Turn off millisecond precision to maintain Rails 4.0 and 4.1 compatibility in test results
-  ActiveSupport::JSON::Encoding.time_precision = 0 if Rails::VERSION::MAJOR >= 4 && Rails::VERSION::MINOR >= 1
+  ActiveSupport::JSON::Encoding.time_precision = 0 if ::Rails::VERSION::MAJOR >= 4 && ::Rails::VERSION::MINOR >= 1
 
-  if Rails::VERSION::MAJOR >= 5
+  if ::Rails::VERSION::MAJOR >= 5
     config.active_support.halt_callback_chains_on_return_false = false
     config.active_record.time_zone_aware_types = [:time, :datetime]
   end
@@ -74,7 +74,7 @@ module ApiV2Engine
 end
 
 # Patch RAILS 4.0 to not use millisecond precision
-if Rails::VERSION::MAJOR >= 4 && Rails::VERSION::MINOR < 1
+if ::Rails::VERSION::MAJOR >= 4 && ::Rails::VERSION::MINOR < 1
   module ActiveSupport
     class TimeWithZone
       def as_json(options = nil)
@@ -89,7 +89,7 @@ if Rails::VERSION::MAJOR >= 4 && Rails::VERSION::MINOR < 1
 end
 
 # Monkeypatch ActionController::TestCase to delete the RAW_POST_DATA on subsequent calls in the same test.
-if Rails::VERSION::MAJOR >= 5
+if ::Rails::VERSION::MAJOR >= 5
   module ClearRawPostHeader
     def process(action, *args)
       @request.delete_header 'RAW_POST_DATA'
@@ -104,7 +104,7 @@ end
 
 # Tests are now using the rails 5 format for the http methods. So for rails 4 we will simply convert them back
 # in a standard way.
-if Rails::VERSION::MAJOR < 5
+if ::Rails::VERSION::MAJOR < 5
   module Rails4ActionControllerProcess
     def process(*args)
       if args[2] && args[2][:params]
@@ -136,7 +136,7 @@ end
 
 # Patch to allow :api_json mime type to be treated as JSON
 # Otherwise it is run through `to_query` and empty arrays are dropped.
-if Rails::VERSION::MAJOR >= 5
+if ::Rails::VERSION::MAJOR >= 5
   module ActionController
     class TestRequest < ActionDispatch::TestRequest
       def assign_parameters(routes, controller_path, action, parameters, generated_path, query_string_keys)
@@ -435,12 +435,12 @@ class Minitest::Test
     true
   end
 
-  self.fixture_path = "#{Rails.root}/fixtures"
+  self.fixture_path = "#{::Rails.root}/fixtures"
   fixtures :all
 end
 
 class ActiveSupport::TestCase
-  self.fixture_path = "#{Rails.root}/fixtures"
+  self.fixture_path = "#{::Rails.root}/fixtures"
   fixtures :all
   setup do
     @routes = TestApp.routes
@@ -448,7 +448,7 @@ class ActiveSupport::TestCase
 end
 
 class ActionDispatch::IntegrationTest
-  self.fixture_path = "#{Rails.root}/fixtures"
+  self.fixture_path = "#{::Rails.root}/fixtures"
   fixtures :all
 
   def assert_jsonapi_response(expected_status)
