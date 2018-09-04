@@ -274,9 +274,9 @@ module JSONAPI
       related_resources.each do |related_resource|
         if reflect
           if related_resource.class._relationships[relationship.inverse_relationship].is_a?(JSONAPI::Relationship::ToMany)
-            related_resource.create_to_many_links(relationship.inverse_relationship, [id], reflected_source: self)
+            related_resource.create_to_many_links(relationship.inverse_relationship, [@model.id], reflected_source: self)
           else
-            related_resource.replace_to_one_link(relationship.inverse_relationship, id, reflected_source: self)
+            related_resource.replace_to_one_link(relationship.inverse_relationship, @model.id, reflected_source: self)
           end
           @reload_needed = true
         else
@@ -344,7 +344,7 @@ module JSONAPI
           fail JSONAPI::Exceptions::RecordNotFound.new(key)
         else
           if related_resource.class._relationships[relationship.inverse_relationship].is_a?(JSONAPI::Relationship::ToMany)
-            related_resource.remove_to_many_link(relationship.inverse_relationship, id, reflected_source: self)
+            related_resource.remove_to_many_link(relationship.inverse_relationship, @model.id, reflected_source: self)
           else
             related_resource.remove_to_one_link(relationship.inverse_relationship, reflected_source: self)
           end
