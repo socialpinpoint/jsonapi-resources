@@ -455,13 +455,23 @@ module JSONAPI
     def foreign_key_value(source, relationship)
       related_resource_id = if source.preloaded_fragments.has_key?(format_key(relationship.name))
         source.preloaded_fragments[format_key(relationship.name)].values.first.try(:id)
-      elsif source.respond_to?("#{relationship.name}_id")
-        # If you have direct access to the underlying id, you don't have to load the relationship
-        # which can save quite a lot of time when loading a lot of data.
-        # This does not apply to e.g. has_one :through relationships.
-        source.public_send("#{relationship.name}_id")
       else
-        source.public_send(relationship.name).try(:id)
+        # find the type of the polymorphic relationship
+        assoc = source._model.public_send(relationship.name)
+
+        # find the matching resource type
+        resource_class = "#{assoc.class.to_s.underscore.singularize}_resource".camelize
+
+        # assume that the ype is in the same module as our source Resource
+        klass_module = source.class.to_s.deconstantize
+
+        klass_module = "#{klass_module}::" if !klass_module.empty?
+
+        # get the primary key field for the polymorphic resource
+        primary_key_field = "#{klass_module}#{resource_class}".constantize._primary_key
+
+        # get the primary key value
+        assoc.public_send(primary_key_field)
       end
       return nil unless related_resource_id
       @id_formatter.format(related_resource_id)

@@ -49,8 +49,18 @@ module JSONAPI
 
     def type_for_source(source)
       if polymorphic?
-        resource = source.public_send(name)
-        resource.class._type if resource
+        assoc = source._model.public_send(@name)
+
+        # find the matching resource type
+        resource_class = "#{assoc.class.to_s.underscore.singularize}_resource".camelize
+
+        # assume that the ype is in the same module as our source Resource
+        klass_module = source.class.to_s.deconstantize
+
+        klass_module = "#{klass_module}::" if !klass_module.empty?
+
+        # get the primary key field for the polymorphic resource
+        return "#{klass_module}#{resource_class}".constantize._type
       else
         type
       end
