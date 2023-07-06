@@ -411,7 +411,8 @@ module JSONAPI
         sorts = sort_criteria
       elsif sort_criteria.is_a?(String)
         begin
-          raw = URI.unescape(sort_criteria)
+          p = URI::Parser.new
+          raw = p.unescape(sort_criteria)
           sorts = CSV.parse_line(raw)
         rescue CSV::MalformedCSVError
           fail JSONAPI::Exceptions::InvalidSortCriteria.new(format_key(resource_klass._type), raw)
