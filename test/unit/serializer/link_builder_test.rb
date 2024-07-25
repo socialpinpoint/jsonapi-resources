@@ -2,6 +2,20 @@ require File.expand_path('../../../test_helper', __FILE__)
 require 'jsonapi-resources'
 require 'json'
 
+module Api
+  module Secret
+    class PostResource < JSONAPI::Resource
+      attribute :title
+      attribute :body
+
+      has_one :author, class_name: 'Person'
+    end
+
+    class PersonResource < JSONAPI::Resource
+    end
+  end
+end
+
 class LinkBuilderTest < ActionDispatch::IntegrationTest
   def setup
     # the route format is being set directly in test_helper and is being set differently depending on
@@ -11,7 +25,9 @@ class LinkBuilderTest < ActionDispatch::IntegrationTest
 
     @base_url        = "http://example.com"
     @route_formatter = JSONAPI.configuration.route_formatter
-    @steve           = Person.create(name: "Steve Rogers", date_joined: "1941-03-01")
+    @steve           = Person.create(name: "Steve Rogers", date_joined: "1941-03-01", id: 777)
+    @steves_prefs    = Preferences.create(advanced_mode: true, id: 444, person_id: 777)
+    @great_post      = Post.create(title: "Greatest Post", id: 555)
   end
 
   def test_engine_boolean
@@ -30,18 +46,18 @@ class LinkBuilderTest < ActionDispatch::IntegrationTest
 
   def test_engine_name
     assert_equal MyEngine::Engine,
-      JSONAPI::LinkBuilder.new(
-        primary_resource_klass: MyEngine::Api::V1::PersonResource
-    ).engine_name
+                 JSONAPI::LinkBuilder.new(
+                   primary_resource_klass: MyEngine::Api::V1::PersonResource
+                 ).engine
 
     assert_equal ApiV2Engine::Engine,
-      JSONAPI::LinkBuilder.new(
-        primary_resource_klass: ApiV2Engine::PersonResource
-    ).engine_name
+                 JSONAPI::LinkBuilder.new(
+                   primary_resource_klass: ApiV2Engine::PersonResource
+                 ).engine
 
     assert_nil JSONAPI::LinkBuilder.new(
       primary_resource_klass: Api::V1::PersonResource
-    ).engine_name
+    ).engine
   end
 
   def test_self_link_regular_app
@@ -51,6 +67,7 @@ class LinkBuilderTest < ActionDispatch::IntegrationTest
       base_url: @base_url,
       route_formatter: @route_formatter,
       primary_resource_klass: primary_resource_klass,
+      url_helpers: TestApp.routes.url_helpers,
     }
 
     builder = JSONAPI::LinkBuilder.new(config)
@@ -60,13 +77,200 @@ class LinkBuilderTest < ActionDispatch::IntegrationTest
     assert_equal expected_link, builder.self_link(source)
   end
 
-  def test_self_link_with_engine_app
-    primary_resource_klass = ApiV2Engine::PersonResource
+  def test_self_link_regular_app_not_routed
+    primary_resource_klass = Api::Secret::PostResource
 
     config = {
       base_url: @base_url,
       route_formatter: @route_formatter,
       primary_resource_klass: primary_resource_klass,
+      url_helpers: TestApp.routes.url_helpers,
+    }
+
+    builder = JSONAPI::LinkBuilder.new(config)
+    source  = primary_resource_klass.new(@great_post, nil)
+
+
+    # Should not warn if warn_on_missing_routes is false
+    JSONAPI.configuration.warn_on_missing_routes = false
+    primary_resource_klass._warned_missing_route = false
+
+    _out, err = capture_subprocess_io do
+      link = builder.self_link(source)
+      assert_nil link
+    end
+    assert_empty(err)
+
+    # Test warn_on_missing_routes
+    JSONAPI.configuration.warn_on_missing_routes = true
+    primary_resource_klass._warned_missing_route = false
+
+    _out, err = capture_subprocess_io do
+      link = builder.self_link(source)
+      assert_nil link
+    end
+    assert_equal(err, "self_link for Api::Secret::PostResource could not be generated\n")
+
+    # should only warn once
+    builder = JSONAPI::LinkBuilder.new(config)
+    _out, err = capture_subprocess_io do
+      link = builder.self_link(source)
+      assert_nil link
+    end
+    assert_empty(err)
+
+  ensure
+    JSONAPI.configuration.warn_on_missing_routes = true
+  end
+
+  def test_primary_resources_url_not_routed
+    primary_resource_klass = Api::Secret::PostResource
+
+    config = {
+      base_url: @base_url,
+      route_formatter: @route_formatter,
+      primary_resource_klass: primary_resource_klass,
+      url_helpers: TestApp.routes.url_helpers,
+    }
+
+    builder = JSONAPI::LinkBuilder.new(config)
+
+    # Should not warn if warn_on_missing_routes is false
+    JSONAPI.configuration.warn_on_missing_routes = false
+    primary_resource_klass._warned_missing_route = false
+
+    _out, err = capture_subprocess_io do
+      link = builder.primary_resources_url
+      assert_nil link
+    end
+    assert_empty(err)
+
+    # Test warn_on_missing_routes
+    JSONAPI.configuration.warn_on_missing_routes = true
+    primary_resource_klass._warned_missing_route = false
+    _out, err = capture_subprocess_io do
+      link = builder.primary_resources_url
+      assert_nil link
+    end
+    assert_equal(err, "primary_resources_url for Api::Secret::PostResource could not be generated\n")
+
+    # should only warn once
+    builder = JSONAPI::LinkBuilder.new(config)
+    _out, err = capture_subprocess_io do
+      link = builder.primary_resources_url
+      assert_nil link
+    end
+    assert_empty(err)
+
+  ensure
+    JSONAPI.configuration.warn_on_missing_routes = true
+  end
+
+  def test_relationships_self_link_not_routed
+    primary_resource_klass = Api::Secret::PostResource
+
+    config = {
+      base_url: @base_url,
+      route_formatter: @route_formatter,
+      primary_resource_klass: primary_resource_klass,
+      url_helpers: TestApp.routes.url_helpers,
+    }
+
+    builder       = JSONAPI::LinkBuilder.new(config)
+
+    source        = primary_resource_klass.new(@great_post, nil)
+
+    relationship  = Api::Secret::PostResource._relationships[:author]
+
+    # Should not warn if warn_on_missing_routes is false
+    JSONAPI.configuration.warn_on_missing_routes = false
+    relationship._warned_missing_route = false
+
+    _out, err = capture_subprocess_io do
+      link = builder.relationships_self_link(source, relationship)
+      assert_nil link
+    end
+    assert_empty(err)
+
+    # Test warn_on_missing_routes
+    JSONAPI.configuration.warn_on_missing_routes = true
+    relationship._warned_missing_route = false
+
+    _out, err = capture_subprocess_io do
+      link = builder.relationships_self_link(source, relationship)
+      assert_nil link
+    end
+    assert_equal(err, "self_link for Api::Secret::PostResource.author(BelongsToOne) could not be generated\n")
+
+    # should only warn once
+    builder = JSONAPI::LinkBuilder.new(config)
+    _out, err = capture_subprocess_io do
+      link = builder.relationships_self_link(source, relationship)
+      assert_nil link
+    end
+    assert_empty(err)
+
+  ensure
+    JSONAPI.configuration.warn_on_missing_routes = true
+  end
+
+  def test_relationships_related_link_not_routed
+    primary_resource_klass = Api::Secret::PostResource
+
+    config = {
+      base_url: @base_url,
+      route_formatter: @route_formatter,
+      primary_resource_klass: primary_resource_klass,
+      url_helpers: TestApp.routes.url_helpers,
+    }
+
+    builder       = JSONAPI::LinkBuilder.new(config)
+
+    source        = primary_resource_klass.new(@great_post, nil)
+
+    relationship  = Api::Secret::PostResource._relationships[:author]
+
+    # Should not warn if warn_on_missing_routes is false
+    JSONAPI.configuration.warn_on_missing_routes = false
+    relationship._warned_missing_route = false
+
+    _out, err = capture_subprocess_io do
+      link = builder.relationships_related_link(source, relationship)
+      assert_nil link
+    end
+    assert_empty(err)
+
+    # Test warn_on_missing_routes
+    JSONAPI.configuration.warn_on_missing_routes = true
+    relationship._warned_missing_route = false
+
+    _out, err = capture_subprocess_io do
+      link = builder.relationships_related_link(source, relationship)
+      assert_nil link
+    end
+    assert_equal(err, "related_link for Api::Secret::PostResource.author(BelongsToOne) could not be generated\n")
+
+    # should only warn once
+    builder = JSONAPI::LinkBuilder.new(config)
+    _out, err = capture_subprocess_io do
+      link = builder.relationships_related_link(source, relationship)
+      assert_nil link
+    end
+    assert_empty(err)
+
+  ensure
+    JSONAPI.configuration.warn_on_missing_routes = true
+  end
+
+  def test_self_link_with_engine_app
+    primary_resource_klass = ApiV2Engine::PersonResource
+    primary_resource_klass._warned_missing_route = false
+
+    config = {
+      base_url: "#{ @base_url }",
+      route_formatter: @route_formatter,
+      primary_resource_klass: primary_resource_klass,
+      url_helpers: ApiV2Engine::Engine.routes.url_helpers,
     }
 
     builder = JSONAPI::LinkBuilder.new(config)
@@ -83,6 +287,7 @@ class LinkBuilderTest < ActionDispatch::IntegrationTest
       base_url: @base_url,
       route_formatter: @route_formatter,
       primary_resource_klass: primary_resource_klass,
+      url_helpers: MyEngine::Engine.routes.url_helpers,
     }
 
     builder = JSONAPI::LinkBuilder.new(config)
@@ -99,6 +304,7 @@ class LinkBuilderTest < ActionDispatch::IntegrationTest
       base_url: @base_url,
       route_formatter: @route_formatter,
       primary_resource_klass: primary_resource_klass,
+      url_helpers: MyEngine::Engine.routes.url_helpers,
     }
 
     builder = JSONAPI::LinkBuilder.new(config)
@@ -113,6 +319,7 @@ class LinkBuilderTest < ActionDispatch::IntegrationTest
       base_url: @base_url,
       route_formatter: @route_formatter,
       primary_resource_klass: Api::V1::PersonResource,
+      url_helpers: TestApp.routes.url_helpers,
     }
 
     builder = JSONAPI::LinkBuilder.new(config)
@@ -125,7 +332,8 @@ class LinkBuilderTest < ActionDispatch::IntegrationTest
     config = {
       base_url: @base_url,
       route_formatter: @route_formatter,
-      primary_resource_klass: ApiV2Engine::PersonResource
+      primary_resource_klass: ApiV2Engine::PersonResource,
+      url_helpers: ApiV2Engine::Engine.routes.url_helpers,
     }
 
     builder = JSONAPI::LinkBuilder.new(config)
@@ -138,7 +346,8 @@ class LinkBuilderTest < ActionDispatch::IntegrationTest
     config = {
       base_url: @base_url,
       route_formatter: @route_formatter,
-      primary_resource_klass: MyEngine::Api::V1::PersonResource
+      primary_resource_klass: MyEngine::Api::V1::PersonResource,
+      url_helpers: MyEngine::Engine.routes.url_helpers,
     }
 
     builder = JSONAPI::LinkBuilder.new(config)
@@ -151,108 +360,149 @@ class LinkBuilderTest < ActionDispatch::IntegrationTest
     config = {
       base_url: @base_url,
       route_formatter: @route_formatter,
-      primary_resource_klass: Api::V1::PersonResource
+      primary_resource_klass: Api::V1::PersonResource,
+      url_helpers: TestApp.routes.url_helpers,
     }
 
     builder       = JSONAPI::LinkBuilder.new(config)
     source        = Api::V1::PersonResource.new(@steve, nil)
-    relationship  = JSONAPI::Relationship::ToMany.new("posts", {})
+    relationship  = Api::V1::PersonResource._relationships[:posts]
     expected_link = "#{ @base_url }/api/v1/people/#{ @steve.id }/relationships/posts"
 
     assert_equal expected_link,
-      builder.relationships_self_link(source, relationship)
+                 builder.relationships_self_link(source, relationship)
+  end
+
+  def test_relationships_self_link_for_regular_app_singleton
+    config = {
+      base_url: @base_url,
+      route_formatter: @route_formatter,
+      primary_resource_klass: Api::V1::PersonResource,
+      url_helpers: TestApp.routes.url_helpers,
+    }
+
+    builder       = JSONAPI::LinkBuilder.new(config)
+    source        = Api::V1::PreferencesResource.new(@steves_prefs, nil)
+    relationship  = Api::V1::PreferencesResource._relationships[:author]
+    expected_link = "#{ @base_url }/api/v1/preferences/relationships/author"
+
+    assert_equal expected_link,
+                 builder.relationships_self_link(source, relationship)
+  end
+
+  def test_relationships_related_link_for_regular_app_singleton
+    config = {
+      base_url: @base_url,
+      route_formatter: @route_formatter,
+      primary_resource_klass: Api::V1::PersonResource,
+      url_helpers: TestApp.routes.url_helpers,
+    }
+
+    builder       = JSONAPI::LinkBuilder.new(config)
+    source        = Api::V1::PreferencesResource.new(@steves_prefs, nil)
+    relationship  = Api::V1::PreferencesResource._relationships[:author]
+    expected_link = "#{ @base_url }/api/v1/preferences/author"
+
+    assert_equal expected_link,
+                 builder.relationships_related_link(source, relationship)
   end
 
   def test_relationships_self_link_for_engine
     config = {
       base_url: @base_url,
       route_formatter: @route_formatter,
-      primary_resource_klass: ApiV2Engine::PersonResource
+      primary_resource_klass: ApiV2Engine::PersonResource,
+      url_helpers: ApiV2Engine::Engine.routes.url_helpers,
     }
 
     builder       = JSONAPI::LinkBuilder.new(config)
     source        = ApiV2Engine::PersonResource.new(@steve, nil)
-    relationship  = JSONAPI::Relationship::ToMany.new("posts", {})
+    relationship  = ApiV2Engine::PersonResource._relationships[:posts]
     expected_link = "#{ @base_url }/api_v2/people/#{ @steve.id }/relationships/posts"
 
     assert_equal expected_link,
-      builder.relationships_self_link(source, relationship)
+                 builder.relationships_self_link(source, relationship)
   end
 
   def test_relationships_self_link_for_namespaced_engine
     config = {
       base_url: @base_url,
       route_formatter: @route_formatter,
-      primary_resource_klass: MyEngine::Api::V1::PersonResource
+      primary_resource_klass: MyEngine::Api::V1::PersonResource,
+      url_helpers: MyEngine::Engine.routes.url_helpers,
     }
 
     builder       = JSONAPI::LinkBuilder.new(config)
     source        = MyEngine::Api::V1::PersonResource.new(@steve, nil)
-    relationship  = JSONAPI::Relationship::ToMany.new("posts", {})
+    relationship  = MyEngine::Api::V1::PersonResource._relationships[:posts]
     expected_link = "#{ @base_url }/boomshaka/api/v1/people/#{ @steve.id }/relationships/posts"
 
     assert_equal expected_link,
-      builder.relationships_self_link(source, relationship)
+                 builder.relationships_self_link(source, relationship)
   end
 
   def test_relationships_related_link_for_regular_app
     config = {
       base_url: @base_url,
       route_formatter: @route_formatter,
-      primary_resource_klass: Api::V1::PersonResource
+      primary_resource_klass: Api::V1::PersonResource,
+      url_helpers: TestApp.routes.url_helpers,
     }
 
     builder       = JSONAPI::LinkBuilder.new(config)
     source        = Api::V1::PersonResource.new(@steve, nil)
-    relationship  = JSONAPI::Relationship::ToMany.new("posts", {})
+    relationship  = Api::V1::PersonResource._relationships[:posts]
     expected_link = "#{ @base_url }/api/v1/people/#{ @steve.id }/posts"
 
     assert_equal expected_link,
-      builder.relationships_related_link(source, relationship)
+                 builder.relationships_related_link(source, relationship)
   end
 
   def test_relationships_related_link_for_engine
     config = {
       base_url: @base_url,
       route_formatter: @route_formatter,
-      primary_resource_klass: ApiV2Engine::PersonResource
+      primary_resource_klass: ApiV2Engine::PersonResource,
+      url_helpers: ApiV2Engine::Engine.routes.url_helpers,
     }
 
     builder       = JSONAPI::LinkBuilder.new(config)
     source        = ApiV2Engine::PersonResource.new(@steve, nil)
-    relationship  = JSONAPI::Relationship::ToMany.new("posts", {})
+    relationship  = ApiV2Engine::PersonResource._relationships[:posts]
     expected_link = "#{ @base_url }/api_v2/people/#{ @steve.id }/posts"
 
     assert_equal expected_link,
-      builder.relationships_related_link(source, relationship)
+                 builder.relationships_related_link(source, relationship)
   end
 
   def test_relationships_related_link_for_namespaced_engine
     config = {
       base_url: @base_url,
       route_formatter: @route_formatter,
-      primary_resource_klass: MyEngine::Api::V1::PersonResource
+      primary_resource_klass: MyEngine::Api::V1::PersonResource,
+      url_helpers: MyEngine::Engine.routes.url_helpers,
     }
 
     builder       = JSONAPI::LinkBuilder.new(config)
     source        = MyEngine::Api::V1::PersonResource.new(@steve, nil)
-    relationship  = JSONAPI::Relationship::ToMany.new("posts", {})
+    relationship  = MyEngine::Api::V1::PersonResource._relationships[:posts]
     expected_link = "#{ @base_url }/boomshaka/api/v1/people/#{ @steve.id }/posts"
 
     assert_equal expected_link,
-      builder.relationships_related_link(source, relationship)
+                 builder.relationships_related_link(source, relationship)
   end
 
   def test_relationships_related_link_with_query_params
     config = {
       base_url: @base_url,
       route_formatter: @route_formatter,
-      primary_resource_klass: Api::V1::PersonResource
+      primary_resource_klass: Api::V1::PersonResource,
+      url_helpers: TestApp.routes.url_helpers,
     }
 
     builder       = JSONAPI::LinkBuilder.new(config)
     source        = Api::V1::PersonResource.new(@steve, nil)
-    relationship  = JSONAPI::Relationship::ToMany.new("posts", {})
+    relationship  = Api::V1::PersonResource._relationships[:posts]
     expected_link = "#{ @base_url }/api/v1/people/#{ @steve.id }/posts?page%5Blimit%5D=12&page%5Boffset%5D=0"
     query         = { page: { offset: 0, limit: 12 } }
 
@@ -264,7 +514,8 @@ class LinkBuilderTest < ActionDispatch::IntegrationTest
     config = {
       base_url: @base_url,
       route_formatter: @route_formatter,
-      primary_resource_klass: Api::V1::PersonResource
+      primary_resource_klass: Api::V1::PersonResource,
+      url_helpers: TestApp.routes.url_helpers,
     }
 
     query         = { page: { offset: 0, limit: 12 } }
@@ -278,7 +529,8 @@ class LinkBuilderTest < ActionDispatch::IntegrationTest
     config = {
       base_url: @base_url,
       route_formatter: @route_formatter,
-      primary_resource_klass: AdminApi::V1::PersonResource
+      primary_resource_klass: AdminApi::V1::PersonResource,
+      url_helpers: TestApp.routes.url_helpers,
     }
 
     query         = { page: { offset: 0, limit: 12 } }
@@ -290,9 +542,10 @@ class LinkBuilderTest < ActionDispatch::IntegrationTest
 
   def test_query_link_for_regular_app_with_dasherized_scope
     config = {
-        base_url: @base_url,
-        route_formatter: DasherizedRouteFormatter,
-        primary_resource_klass: DasherizedNamespace::V1::PersonResource
+      base_url: @base_url,
+      route_formatter: DasherizedRouteFormatter,
+      primary_resource_klass: DasherizedNamespace::V1::PersonResource,
+      url_helpers: TestApp.routes.url_helpers,
     }
 
     query         = { page: { offset: 0, limit: 12 } }
@@ -302,25 +555,12 @@ class LinkBuilderTest < ActionDispatch::IntegrationTest
     assert_equal expected_link, builder.query_link(query)
   end
 
-  def test_query_link_for_regular_app_with_optional_scope
-    config = {
-        base_url: @base_url,
-        route_formatter: OptionalRouteFormatter,
-        primary_resource_klass: OptionalNamespace::V1::PersonResource
-    }
-
-    query         = { page: { offset: 0, limit: 12 } }
-    builder       = JSONAPI::LinkBuilder.new(config)
-    expected_link = "#{ @base_url }/optional_namespace/people?page%5Blimit%5D=12&page%5Boffset%5D=0"
-
-    assert_equal expected_link, builder.query_link(query)
-  end
-
   def test_query_link_for_engine
     config = {
       base_url: @base_url,
       route_formatter: @route_formatter,
-      primary_resource_klass: ApiV2Engine::PersonResource
+      primary_resource_klass: ApiV2Engine::PersonResource,
+      url_helpers: ApiV2Engine::Engine.routes.url_helpers,
     }
 
     query         = { page: { offset: 0, limit: 12 } }
@@ -334,7 +574,8 @@ class LinkBuilderTest < ActionDispatch::IntegrationTest
     config = {
       base_url: @base_url,
       route_formatter: @route_formatter,
-      primary_resource_klass: MyEngine::Api::V1::PersonResource
+      primary_resource_klass: MyEngine::Api::V1::PersonResource,
+      url_helpers: MyEngine::Engine.routes.url_helpers,
     }
 
     query         = { page: { offset: 0, limit: 12 } }
@@ -346,9 +587,10 @@ class LinkBuilderTest < ActionDispatch::IntegrationTest
 
   def test_query_link_for_engine_with_dasherized_scope
     config = {
-        base_url: @base_url,
-        route_formatter: DasherizedRouteFormatter,
-        primary_resource_klass: MyEngine::DasherizedNamespace::V1::PersonResource
+      base_url: @base_url,
+      route_formatter: DasherizedRouteFormatter,
+      primary_resource_klass: MyEngine::DasherizedNamespace::V1::PersonResource,
+      url_helpers: MyEngine::Engine.routes.url_helpers,
     }
 
     query         = { page: { offset: 0, limit: 12 } }
@@ -358,25 +600,12 @@ class LinkBuilderTest < ActionDispatch::IntegrationTest
     assert_equal expected_link, builder.query_link(query)
   end
 
-  def test_query_link_for_engine_with_optional_scope
-    config = {
-        base_url: @base_url,
-        route_formatter: OptionalRouteFormatter,
-        primary_resource_klass: MyEngine::OptionalNamespace::V1::PersonResource
-    }
-
-    query         = { page: { offset: 0, limit: 12 } }
-    builder       = JSONAPI::LinkBuilder.new(config)
-    expected_link = "#{ @base_url }/boomshaka/optional_namespace/people?page%5Blimit%5D=12&page%5Boffset%5D=0"
-
-    assert_equal expected_link, builder.query_link(query)
-  end
-
   def test_query_link_for_engine_with_camel_case_scope
     config = {
       base_url: @base_url,
       route_formatter: @route_formatter,
-      primary_resource_klass: MyEngine::AdminApi::V1::PersonResource
+      primary_resource_klass: MyEngine::AdminApi::V1::PersonResource,
+      url_helpers: MyEngine::Engine.routes.url_helpers,
     }
 
     query         = { page: { offset: 0, limit: 12 } }

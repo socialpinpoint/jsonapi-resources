@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 module JSONAPI
   class OperationResult
     attr_accessor :code
@@ -49,7 +51,7 @@ module JSONAPI
 
     def to_hash(serializer)
       if serializer
-        serializer.serialize_resource_set_to_hash(resource_set)
+        serializer.serialize_resource_set_to_hash_single(resource_set)
       else
         # :nocov:
         {}
@@ -71,7 +73,7 @@ module JSONAPI
 
     def to_hash(serializer)
       if serializer
-        serializer.serialize_resources_set_to_hash(resource_set)
+        serializer.serialize_resource_set_to_hash_plural(resource_set)
       else
         # :nocov:
         {}
@@ -91,7 +93,7 @@ module JSONAPI
 
     def to_hash(serializer = nil)
       if serializer
-        serializer.serialize_related_resources_set_to_hash(source_resource, resource_set)
+        serializer.serialize_related_resource_set_to_hash_plural(resource_set, source_resource)
       else
         # :nocov:
         {}
@@ -100,7 +102,7 @@ module JSONAPI
     end
   end
 
-  class LinksObjectOperationResult < OperationResult
+  class RelationshipOperationResult < OperationResult
     attr_accessor :parent_resource, :relationship, :resource_ids
 
     def initialize(code, parent_resource, relationship, resource_ids, options = {})
@@ -112,7 +114,7 @@ module JSONAPI
 
     def to_hash(serializer = nil)
       if serializer
-        serializer.serialize_to_links_hash(parent_resource, relationship, resource_ids)
+        serializer.serialize_to_relationship_hash(parent_resource, relationship, resource_ids)
       else
         # :nocov:
         {}

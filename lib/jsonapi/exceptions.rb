@@ -1,7 +1,9 @@
+# frozen_string_literal: true
+
 module JSONAPI
   module Exceptions
     class Error < RuntimeError
-      attr :error_object_overrides
+      attr_reader :error_object_overrides
 
       def initialize(error_object_overrides = {})
         @error_object_overrides = error_object_overrides
@@ -327,6 +329,26 @@ module JSONAPI
       end
     end
 
+    class InvalidRelationship < Error
+      attr_accessor :relationship_name, :type
+
+      def initialize(type, relationship_name, error_object_overrides = {})
+        @relationship_name = relationship_name
+        @type = type
+        super(error_object_overrides)
+      end
+
+      def errors
+        [create_error_object(code: JSONAPI::INVALID_RELATIONSHIP,
+                             status: :bad_request,
+                             title: I18n.translate('jsonapi-resources.exceptions.invalid_relationship.title',
+                                                   default: 'Invalid relationship'),
+                             detail: I18n.translate('jsonapi-resources.exceptions.invalid_relationship.detail',
+                                                    default: "#{relationship_name} is not a valid field for #{type}.",
+                                                    relationship_name: relationship_name, type: type))]
+      end
+    end
+
     class InvalidInclude < Error
       attr_accessor :relationship, :resource
 
@@ -342,7 +364,7 @@ module JSONAPI
                              title: I18n.translate('jsonapi-resources.exceptions.invalid_include.title',
                                                    default: 'Invalid field'),
                              detail: I18n.translate('jsonapi-resources.exceptions.invalid_include.detail',
-                                                    default: "#{relationship} is not a valid relationship of #{resource}",
+                                                    default: "#{relationship} is not a valid includable relationship of #{resource}",
                                                     relationship: relationship, resource: resource))]
       end
     end

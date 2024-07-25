@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 module ActionDispatch
   module Routing
     class Mapper
@@ -19,6 +21,12 @@ module ActionDispatch
         def jsonapi_resource(*resources, &_block)
           @resource_type = resources.first
           res = JSONAPI::Resource.resource_klass_for(resource_type_with_module_prefix(@resource_type))
+
+          res._routed = true
+
+          unless res.singleton?
+            warn "Singleton routes created for non singleton resource #{res}. Links may not be generated correctly."
+          end
 
           options = resources.extract_options!.dup
           options[:controller] ||= @resource_type
@@ -79,6 +87,12 @@ module ActionDispatch
         def jsonapi_resources(*resources, &_block)
           @resource_type = resources.first
           res = JSONAPI::Resource.resource_klass_for(resource_type_with_module_prefix(@resource_type))
+
+          res._routed = true
+
+          if res.singleton?
+            warn "Singleton resource #{res} should use `jsonapi_resource` instead."
+          end
 
           options = resources.extract_options!.dup
           options[:controller] ||= @resource_type
@@ -154,7 +168,8 @@ module ActionDispatch
 
           if methods.include?(:show)
             match "relationships/#{formatted_relationship_name}", controller: options[:controller],
-                  action: 'show_relationship', relationship: link_type.to_s, via: [:get]
+                  action: 'show_relationship', relationship: link_type.to_s, via: [:get],
+                  as: "relationships/#{link_type}"
           end
 
           if res.mutable?
@@ -182,7 +197,8 @@ module ActionDispatch
 
           if methods.include?(:show)
             match "relationships/#{formatted_relationship_name}", controller: options[:controller],
-                  action: 'show_relationship', relationship: link_type.to_s, via: [:get]
+                  action: 'show_relationship', relationship: link_type.to_s, via: [:get],
+                  as: "relationships/#{link_type}"
           end
 
           if res.mutable?
@@ -210,6 +226,8 @@ module ActionDispatch
           relationship_name = relationship.first
           relationship = source._relationships[relationship_name]
 
+          relationship._routed = true
+
           formatted_relationship_name = format_route(relationship.name)
 
           if relationship.polymorphic?
@@ -221,7 +239,8 @@ module ActionDispatch
 
           match formatted_relationship_name, controller: options[:controller],
                 relationship: relationship.name, source: resource_type_with_module_prefix(source._type),
-                action: 'show_related_resource', via: [:get]
+                action: 'show_related_resource', via: [:get],
+                as: "related/#{relationship_name}"
         end
 
         def jsonapi_related_resources(*relationship)
@@ -231,6 +250,8 @@ module ActionDispatch
           relationship_name = relationship.first
           relationship = source._relationships[relationship_name]
 
+          relationship._routed = true
+
           formatted_relationship_name = format_route(relationship.name)
           related_resource = JSONAPI::Resource.resource_klass_for(resource_type_with_module_prefix(relationship.class_name.underscore))
           options[:controller] ||= related_resource._type.to_s
@@ -238,7 +259,8 @@ module ActionDispatch
           match formatted_relationship_name,
                 controller: options[:controller],
                 relationship: relationship.name, source: resource_type_with_module_prefix(source._type),
-                action: 'index_related_resources', via: [:get]
+                action: 'index_related_resources', via: [:get],
+                as: "related/#{relationship_name}"
         end
 
         protected

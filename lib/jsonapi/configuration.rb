@@ -1,6 +1,7 @@
+# frozen_string_literal: true
+
 require 'jsonapi/formatter'
 require 'jsonapi/processor'
-require 'jsonapi/active_relation_resource_finder'
 require 'concurrent'
 
 module JSONAPI
@@ -10,14 +11,16 @@ module JSONAPI
                 :route_format,
                 :raise_if_parameters_not_allowed,
                 :warn_on_route_setup_issues,
-                :allow_include,
+                :warn_on_missing_routes,
+                :warn_on_performance_issues,
+                :default_allow_include_to_one,
+                :default_allow_include_to_many,
                 :allow_sort,
                 :allow_filter,
                 :default_paginator,
                 :default_page_size,
                 :maximum_page_size,
-                :resource_finder,
-                :default_processor_klass,
+                :default_processor_klass_name,
                 :use_text_errors,
                 :top_level_links_include_pagination,
                 :top_level_meta_include_record_count,
@@ -27,8 +30,8 @@ module JSONAPI
                 :allow_transactions,
                 :include_backtraces_in_errors,
                 :include_application_backtraces_in_errors,
-                :exception_class_whitelist,
-                :whitelist_all_exceptions,
+                :exception_class_allowlist,
+                :allow_all_exceptions,
                 :always_include_to_one_linkage_data,
                 :always_include_to_many_linkage_data,
                 :cache_formatters,
@@ -37,7 +40,8 @@ module JSONAPI
                 :default_caching,
                 :default_resource_cache_field,
                 :resource_cache_digest_function,
-                :resource_cache_usage_report_function
+                :resource_cache_usage_report_function,
+                :default_exclude_links
 
     def initialize
       #:underscored_key, :camelized_key, :dasherized_key, or custom
@@ -50,13 +54,16 @@ module JSONAPI
       self.resource_key_type = :integer
 
       # optional request features
-      self.allow_include = true
+      self.default_allow_include_to_one = true
+      self.default_allow_include_to_many = true
       self.allow_sort = true
       self.allow_filter = true
 
       self.raise_if_parameters_not_allowed = true
 
       self.warn_on_route_setup_issues = true
+      self.warn_on_missing_routes = true
+      self.warn_on_performance_issues = true
 
       # :none, :offset, :paged, or a custom paginator name
       self.default_paginator = :none
@@ -78,24 +85,24 @@ module JSONAPI
       self.use_text_errors = false
 
       # Whether or not to include exception backtraces in JSONAPI error
-      # responses.  Defaults to `false` in production, and `true` otherwise.
-      self.include_backtraces_in_errors = !Rails.env.production?
+      # responses.  Defaults to `false` in anything other than development or test.
+      self.include_backtraces_in_errors = (Rails.env.development? || Rails.env.test?)
 
       # Whether or not to include exception application backtraces in JSONAPI error
-      # responses.  Defaults to `false` in production, and `true` otherwise.
-      self.include_application_backtraces_in_errors = !Rails.env.production?
+      # responses.  Defaults to `false` in anything other than development or test.
+      self.include_application_backtraces_in_errors = (Rails.env.development? || Rails.env.test?)
 
       # List of classes that should not be rescued by the operations processor.
       # For example, if you use Pundit for authorization, you might
       # raise a Pundit::NotAuthorizedError at some point during operations
       # processing. If you want to use Rails' `rescue_from` macro to
       # catch this error and render a 403 status code, you should add
-      # the `Pundit::NotAuthorizedError` to the `exception_class_whitelist`.
-      self.exception_class_whitelist = []
+      # the `Pundit::NotAuthorizedError` to the `exception_class_allowlist`.
+      self.exception_class_allowlist = []
 
-      # If enabled, will override configuration option `exception_class_whitelist`
-      # and whitelist all exceptions.
-      self.whitelist_all_exceptions = false
+      # If enabled, will override configuration option `exception_class_allowlist`
+      # and allow all exceptions.
+      self.allow_all_exceptions = false
 
       # Resource Linkage
       # Controls the serialization of resource linkage for non compound documents
@@ -103,15 +110,9 @@ module JSONAPI
       self.always_include_to_one_linkage_data = false
       self.always_include_to_many_linkage_data = false
 
-      # ResourceFinder Mixin
-      # The default ResourceFinder is the ActiveRelationResourceFinder which provides
-      # access to ActiveRelation backed models. Custom ResourceFinders can be specified
-      # in order to support other ORMs.
-      self.resource_finder = JSONAPI::ActiveRelationResourceFinder
-
       # The default Operation Processor to use if one is not defined specifically
       # for a Resource.
-      self.default_processor_klass = JSONAPI::Processor
+      self.default_processor_klass_name = 'JSONAPI::Processor'
 
       # Allows transactions for creating and updating records
       # Set this to false if your backend does not support transactions (e.g. Mongodb)
@@ -153,6 +154,12 @@ module JSONAPI
       # Optionally provide a callable which JSONAPI will call with information about cache
       # performance. Should accept three arguments: resource name, hits count, misses count.
       self.resource_cache_usage_report_function = nil
+
+      # Global configuration for links exclusion
+      # Controls whether to generate links like `self`, `related` with all the resources
+      # and relationships. Accepts either `:default`, `:none`, or array containing the
+      # specific default links to exclude, which may be `:self` and `:related`.
+      self.default_exclude_links = :none
     end
 
     def cache_formatters=(bool)
@@ -214,20 +221,42 @@ module JSONAPI
       return formatter
     end
 
-    def exception_class_whitelisted?(e)
-      @whitelist_all_exceptions ||
-        @exception_class_whitelist.flatten.any? { |k| e.class.ancestors.map(&:to_s).include?(k.to_s) }
+    def exception_class_allowed?(e)
+      @allow_all_exceptions ||
+        @exception_class_allowlist.flatten.any? { |k| e.class.ancestors.map(&:to_s).include?(k.to_s) }
     end
 
     def default_processor_klass=(default_processor_klass)
+      ActiveSupport::Deprecation.warn('`default_processor_klass` has been replaced by `default_processor_klass_name`.')
       @default_processor_klass = default_processor_klass
     end
 
-    def resource_finder=(resource_finder)
-      @resource_finder = resource_finder
+    def default_processor_klass
+      @default_processor_klass ||= default_processor_klass_name.safe_constantize
     end
 
-    attr_writer :allow_include, :allow_sort, :allow_filter
+    def default_processor_klass_name=(default_processor_klass_name)
+      @default_processor_klass = nil
+      @default_processor_klass_name = default_processor_klass_name
+    end
+
+    def allow_include=(allow_include)
+      ActiveSupport::Deprecation.warn('`allow_include` has been replaced by `default_allow_include_to_one` and `default_allow_include_to_many` options.')
+      @default_allow_include_to_one = allow_include
+      @default_allow_include_to_many = allow_include
+    end
+
+    def whitelist_all_exceptions=(allow_all_exceptions)
+      ActiveSupport::Deprecation.warn('`whitelist_all_exceptions` has been replaced by `allow_all_exceptions`')
+      @allow_all_exceptions = allow_all_exceptions
+    end
+
+    def exception_class_whitelist=(exception_class_allowlist)
+      ActiveSupport::Deprecation.warn('`exception_class_whitelist` has been replaced by `exception_class_allowlist`')
+      @exception_class_allowlist = exception_class_allowlist
+    end
+
+    attr_writer :allow_sort, :allow_filter, :default_allow_include_to_one, :default_allow_include_to_many
 
     attr_writer :default_paginator
 
@@ -253,9 +282,9 @@ module JSONAPI
 
     attr_writer :include_application_backtraces_in_errors
 
-    attr_writer :exception_class_whitelist
+    attr_writer :exception_class_allowlist
 
-    attr_writer :whitelist_all_exceptions
+    attr_writer :allow_all_exceptions
 
     attr_writer :always_include_to_one_linkage_data
 
@@ -264,6 +293,10 @@ module JSONAPI
     attr_writer :raise_if_parameters_not_allowed
 
     attr_writer :warn_on_route_setup_issues
+
+    attr_writer :warn_on_missing_routes
+
+    attr_writer :warn_on_performance_issues
 
     attr_writer :use_relationship_reflection
 
@@ -276,6 +309,8 @@ module JSONAPI
     attr_writer :resource_cache_digest_function
 
     attr_writer :resource_cache_usage_report_function
+
+    attr_writer :default_exclude_links
   end
 
   class << self

@@ -6,11 +6,26 @@ end
 
 class PostsControllerTest < ActionController::TestCase
   def setup
+    super
     JSONAPI.configuration.raise_if_parameters_not_allowed = true
+    JSONAPI.configuration.always_include_to_one_linkage_data = false
+  end
+
+  def test_links_include_relative_root
+    Rails.application.config.relative_url_root = '/subdir'
+    assert_cacheable_get :index
+    assert json_response['data'][0]['links']['self'].include?('/subdir')
+    Rails.application.config.relative_url_root = nil
   end
 
   def test_index
     assert_cacheable_get :index
+    assert_response :success
+    assert json_response['data'].is_a?(Array)
+  end
+
+  def test_index_includes
+    assert_cacheable_get :index, params: { include: 'author,comments' }
     assert_response :success
     assert json_response['data'].is_a?(Array)
   end
@@ -72,26 +87,40 @@ class PostsControllerTest < ActionController::TestCase
     assert_equal "All requests must use the '#{JSONAPI::MEDIA_TYPE}' Accept without media type parameters. This request specified '#{@request.headers['Accept']}'.", json_response['errors'][0]['detail']
   end
 
-  def test_exception_class_whitelist
-    original_whitelist = JSONAPI.configuration.exception_class_whitelist.dup
+  def test_exception_class_allowlist
+    original_allowlist = JSONAPI.configuration.exception_class_allowlist.dup
     $PostProcessorRaisesErrors = true
     # test that the operations dispatcher rescues the error when it
-    # has not been added to the exception_class_whitelist
+    # has not been added to the exception_class_allowlist
     assert_cacheable_get :index
     assert_response 500
 
     # test that the operations dispatcher does not rescue the error when it
-    # has been added to the exception_class_whitelist
-    JSONAPI.configuration.exception_class_whitelist << PostsController::SpecialError
+    # has been added to the exception_class_allowlist
+    JSONAPI.configuration.exception_class_allowlist << PostsController::SpecialError
     assert_cacheable_get :index
     assert_response 403
   ensure
     $PostProcessorRaisesErrors = false
-    JSONAPI.configuration.exception_class_whitelist = original_whitelist
+    JSONAPI.configuration.exception_class_allowlist = original_allowlist
+  end
+
+  def test_allow_all_exceptions
+    original_config = JSONAPI.configuration.allow_all_exceptions
+    $PostProcessorRaisesErrors = true
+    assert_cacheable_get :index
+    assert_response 500
+
+    JSONAPI.configuration.allow_all_exceptions = true
+    assert_cacheable_get :index
+    assert_response 403
+  ensure
+    $PostProcessorRaisesErrors = false
+    JSONAPI.configuration.allow_all_exceptions = original_config
   end
 
   def test_whitelist_all_exceptions
-    original_config = JSONAPI.configuration.whitelist_all_exceptions
+    original_config = JSONAPI.configuration.allow_all_exceptions
     $PostProcessorRaisesErrors = true
     assert_cacheable_get :index
     assert_response 500
@@ -105,18 +134,18 @@ class PostsControllerTest < ActionController::TestCase
   end
 
   def test_exception_added_to_request_env
-    original_config = JSONAPI.configuration.whitelist_all_exceptions
+    original_config = JSONAPI.configuration.allow_all_exceptions
     $PostProcessorRaisesErrors = true
     refute @request.env['action_dispatch.exception']
     assert_cacheable_get :index
     assert @request.env['action_dispatch.exception']
 
-    JSONAPI.configuration.whitelist_all_exceptions = true
+    JSONAPI.configuration.allow_all_exceptions = true
     assert_cacheable_get :index
     assert @request.env['action_dispatch.exception']
   ensure
     $PostProcessorRaisesErrors = false
-    JSONAPI.configuration.whitelist_all_exceptions = original_config
+    JSONAPI.configuration.allow_all_exceptions = original_config
   end
 
   def test_exception_includes_backtrace_when_enabled
@@ -159,7 +188,7 @@ class PostsControllerTest < ActionController::TestCase
 
   def test_on_server_error_block_callback_with_exception
     original_config = JSONAPI.configuration.dup
-    JSONAPI.configuration.exception_class_whitelist = []
+    JSONAPI.configuration.exception_class_allowlist = []
     $PostProcessorRaisesErrors = true
 
     @controller.class.instance_variable_set(:@callback_message, "none")
@@ -180,7 +209,7 @@ class PostsControllerTest < ActionController::TestCase
 
   def test_on_server_error_method_callback_with_exception
     original_config = JSONAPI.configuration.dup
-    JSONAPI.configuration.exception_class_whitelist = []
+    JSONAPI.configuration.exception_class_allowlist = []
     $PostProcessorRaisesErrors = true
 
     #ignores methods that don't exist
@@ -199,7 +228,7 @@ class PostsControllerTest < ActionController::TestCase
 
   def test_on_server_error_method_callback_with_exception_on_serialize
     original_config = JSONAPI.configuration.dup
-    JSONAPI.configuration.exception_class_whitelist = []
+    JSONAPI.configuration.exception_class_allowlist = []
     $PostSerializerRaisesErrors = true
 
     #ignores methods that don't exist
@@ -245,7 +274,7 @@ class PostsControllerTest < ActionController::TestCase
     assert_equal 0, json_response['data'].size
   end
 
-  def test_index_filter_by_id
+  def test_index_filter_by_single_id
     assert_cacheable_get :index, params: {filter: {id: '1'}}
     assert_response :success
     assert json_response['data'].is_a?(Array)
@@ -266,7 +295,7 @@ class PostsControllerTest < ActionController::TestCase
     assert_equal 1, json_response['data'].size
   end
 
-  def test_index_filter_by_ids
+  def test_index_filter_by_array_of_ids
     assert_cacheable_get :index, params: {filter: {ids: '1,2'}}
     assert_response :success
     assert json_response['data'].is_a?(Array)
@@ -437,7 +466,7 @@ class PostsControllerTest < ActionController::TestCase
     assert_cacheable_get :index, params: {sort: 'title'}
 
     assert_response :success
-    assert_equal "A First Post", json_response['data'][0]['attributes']['title']
+    assert_equal "A 1ST Post", json_response['data'][0]['attributes']['title']
   end
 
   def test_sorting_desc
@@ -451,7 +480,7 @@ class PostsControllerTest < ActionController::TestCase
     assert_cacheable_get :index, params: {sort: 'title,body'}
 
     assert_response :success
-    assert_equal '14', json_response['data'][0]['id']
+    assert_equal '15', json_response['data'][0]['id']
   end
 
   def create_alphabetically_first_user_and_post
@@ -465,8 +494,15 @@ class PostsControllerTest < ActionController::TestCase
 
     assert_response :success
     assert json_response['data'].length > 10, 'there are enough records to show sort'
-    assert_equal '17', json_response['data'][0]['id'], 'nil is at the top'
-    assert_equal post.id.to_s, json_response['data'][1]['id'], 'alphabetically first user is second'
+
+    # Postgres sorts nulls last, whereas sqlite and mysql sort nulls first
+    if ENV['DATABASE_URL'].starts_with?('postgres')
+      assert_equal '17', json_response['data'][-1]['id'], 'nil is at the start'
+      assert_equal post.id.to_s, json_response['data'][0]['id'], 'alphabetically first user is not first'
+    else
+      assert_equal '17', json_response['data'][0]['id'], 'nil is at the end'
+      assert_equal post.id.to_s, json_response['data'][1]['id'], 'alphabetically first user is second'
+    end
   end
 
   def test_desc_sorting_by_relationship_field
@@ -475,8 +511,15 @@ class PostsControllerTest < ActionController::TestCase
 
     assert_response :success
     assert json_response['data'].length > 10, 'there are enough records to show sort'
-    assert_equal '17', json_response['data'][-1]['id'], 'nil is at the bottom'
-    assert_equal post.id.to_s, json_response['data'][-2]['id'], 'alphabetically first user is second last'
+
+    # Postgres sorts nulls last, whereas sqlite and mysql sort nulls first
+    if ENV['DATABASE_URL'].starts_with?('postgres')
+      assert_equal '17', json_response['data'][0]['id'], 'nil is at the start'
+      assert_equal post.id.to_s, json_response['data'][-1]['id']
+    else
+      assert_equal '17', json_response['data'][-1]['id'], 'nil is at the end'
+      assert_equal post.id.to_s, json_response['data'][-2]['id'], 'alphabetically first user is second last'
+    end
   end
 
   def test_sorting_by_relationship_field_include
@@ -485,8 +528,14 @@ class PostsControllerTest < ActionController::TestCase
 
     assert_response :success
     assert json_response['data'].length > 10, 'there are enough records to show sort'
-    assert_equal '17', json_response['data'][0]['id'], 'nil is at the top'
-    assert_equal post.id.to_s, json_response['data'][1]['id'], 'alphabetically first user is second'
+
+    if ENV['DATABASE_URL'].starts_with?('postgres')
+      assert_equal '17', json_response['data'][-1]['id'], 'nil is at the top'
+      assert_equal post.id.to_s, json_response['data'][0]['id']
+    else
+      assert_equal '17', json_response['data'][0]['id'], 'nil is at the top'
+      assert_equal post.id.to_s, json_response['data'][1]['id'], 'alphabetically first user is second'
+    end
   end
 
   def test_invalid_sort_param
@@ -538,7 +587,25 @@ class PostsControllerTest < ActionController::TestCase
     JSONAPI.configuration.top_level_meta_include_page_count = false
   end
 
-  def test_show_single_with_includes
+  def test_show_single_with_has_one_include_included_exists
+    assert_cacheable_get :show, params: {id: '1', include: 'author'}
+    assert_response :success
+    assert_equal 1, json_response['included'].size
+    assert json_response['data']['relationships']['author'].has_key?('data'), 'Missing required data key'
+    refute_nil json_response['data']['relationships']['author']['data'], 'Data should not be nil'
+    refute json_response['data']['relationships']['tags'].has_key?('data'), 'Not included relationships should not have data'
+  end
+
+  def test_show_single_with_has_one_include_included_does_not_exist
+    assert_cacheable_get :show, params: {id: '1', include: 'section'}
+    assert_response :success
+    assert_nil json_response['included']
+    assert json_response['data']['relationships']['section'].has_key?('data'), 'Missing required data key'
+    assert_nil json_response['data']['relationships']['section']['data'], 'Data should be nil'
+    refute json_response['data']['relationships']['tags'].has_key?('data'), 'Not included relationships should not have data'
+  end
+
+  def test_show_single_with_has_many_include
     assert_cacheable_get :show, params: {id: '1', include: 'comments'}
     assert_response :success
     assert json_response['data'].is_a?(Hash)
@@ -550,12 +617,50 @@ class PostsControllerTest < ActionController::TestCase
     assert_equal 2, json_response['included'].size
   end
 
+  def test_includes_for_empty_relationships_shows_but_are_empty
+    assert_cacheable_get :show, params: {id: '17', include: 'author,tags'}
+
+    assert_response :success
+    assert json_response['data']['relationships']['author'].has_key?('data'), 'data key should exist for empty has_one relationship'
+    assert_nil json_response['data']['relationships']['author']['data'], 'Data should be null'
+    assert json_response['data']['relationships']['tags'].has_key?('data'), 'data key should exist for empty has_many relationship'
+    assert json_response['data']['relationships']['tags']['data'].is_a?(Array), 'Data should be array'
+    assert json_response['data']['relationships']['tags']['data'].empty?, 'Data array should be empty'
+  end
+
   def test_show_single_with_include_disallowed
+    original_config = JSONAPI.configuration.dup
     JSONAPI.configuration.allow_include = false
     assert_cacheable_get :show, params: {id: '1', include: 'comments'}
     assert_response :bad_request
   ensure
-    JSONAPI.configuration.allow_include = true
+    JSONAPI.configuration = original_config
+  end
+
+  def test_show_single_include_linkage
+    JSONAPI.configuration.always_include_to_one_linkage_data = true
+
+    assert_cacheable_get :show, params: {id: '17'}
+    assert_response :success
+    assert json_response['data']['relationships']['author'].has_key?('data'), 'data key should exist for empty has_one relationship'
+    assert_nil json_response['data']['relationships']['author']['data'], 'Data should be null'
+    refute json_response['data']['relationships']['tags'].has_key?('data'), 'data key should not exist for empty has_many relationship if not included'
+
+  ensure
+    JSONAPI.configuration.always_include_to_one_linkage_data = false
+  end
+
+  def test_index_single_include_linkage
+    JSONAPI.configuration.always_include_to_one_linkage_data = true
+
+    assert_cacheable_get :index, params: { filter: { id: '17'} }
+    assert_response :success
+    assert json_response['data'][0]['relationships']['author'].has_key?('data'), 'data key should exist for empty has_one relationship'
+    assert_nil json_response['data'][0]['relationships']['author']['data'], 'Data should be null'
+    refute json_response['data'][0]['relationships']['tags'].has_key?('data'), 'data key should not exist for empty has_many relationship if not included'
+
+  ensure
+    JSONAPI.configuration.always_include_to_one_linkage_data = false
   end
 
   def test_show_single_with_fields
@@ -1339,6 +1444,25 @@ class PostsControllerTest < ActionController::TestCase
     assert_equal ruby.id, post_object.section_id
   end
 
+  def test_remove_relationship_to_many_belongs_to
+    set_content_type_header!
+    c = Comment.find(3)
+    p = Post.find(2)
+    total_comment_count = Comment.count
+    post_comment_count = p.comments.count
+
+    put :destroy_relationship, params: {post_id: "#{p.id}", relationship: 'comments', data: [{type: 'comments', id: "#{c.id}"}]}
+
+    assert_response :no_content
+    p = Post.find(2)
+    c = Comment.find(3)
+
+    assert_equal post_comment_count - 1, p.comments.length
+    assert_equal total_comment_count, Comment.count
+
+    assert_nil c.post_id
+  end
+
   def test_update_relationship_to_many_join_table_single
     set_content_type_header!
     put :update_relationship, params: {post_id: 3, relationship: 'tags', data: []}
@@ -1923,7 +2047,7 @@ class PostsControllerTest < ActionController::TestCase
   end
 
   def test_show_to_one_relationship
-    get :show_relationship, params: {post_id: '1', relationship: 'author'}
+    assert_cacheable_get :show_relationship, params: {post_id: '1', relationship: 'author'}
     assert_response :success
     assert_hash_equals json_response,
                        {data: {
@@ -2049,14 +2173,40 @@ class PicturesControllerTest < ActionController::TestCase
   def test_pictures_index
     assert_cacheable_get :index
     assert_response :success
-    assert_equal 7, json_response['data'].size
+    assert_equal 8, json_response['data'].size
   end
 
   def test_pictures_index_with_polymorphic_include_one_level
     assert_cacheable_get :index, params: {include: 'imageable'}
     assert_response :success
-    assert_equal 7, json_response['data'].try(:size)
-    assert_equal 4, json_response['included'].try(:size)
+    assert_equal 8, json_response['data'].try(:size)
+    assert_equal 5, json_response['included'].try(:size)
+  end
+
+  def test_pictures_index_with_polymorphic_to_one_linkage
+    JSONAPI.configuration.always_include_to_one_linkage_data = true
+    assert_cacheable_get :index
+    assert_response :success
+    assert_equal 8, json_response['data'].try(:size)
+    assert_equal '3', json_response['data'][2]['id']
+    assert_nil json_response['data'][2]['relationships']['imageable']['data']
+    assert_equal 'products', json_response['data'][0]['relationships']['imageable']['data']['type']
+    assert_equal '1', json_response['data'][0]['relationships']['imageable']['data']['id']
+  ensure
+    JSONAPI.configuration.always_include_to_one_linkage_data = false
+  end
+
+  def test_pictures_index_with_polymorphic_include_one_level_to_one_linkages
+    JSONAPI.configuration.always_include_to_one_linkage_data = true
+    assert_cacheable_get :index, params: {include: 'imageable'}
+    assert_response :success
+    assert_equal 8, json_response['data'].try(:size)
+    assert_equal 5, json_response['included'].try(:size)
+    assert_nil json_response['data'][2]['relationships']['imageable']['data']
+    assert_equal 'products', json_response['data'][0]['relationships']['imageable']['data']['type']
+    assert_equal '1', json_response['data'][0]['relationships']['imageable']['data']['id']
+  ensure
+    JSONAPI.configuration.always_include_to_one_linkage_data = false
   end
 
   def test_update_relationship_to_one_polymorphic
@@ -2068,20 +2218,27 @@ class PicturesControllerTest < ActionController::TestCase
     picture_object = Picture.find(48)
     assert_equal 2, picture_object.imageable_id
   end
+
+  def test_pictures_index_with_filter_documents
+    assert_cacheable_get :index, params: {include: 'imageable', filter: {'imageable#documents.name': 'Management Through the Years'}}
+    assert_response :success
+    assert_equal 3, json_response['data'].try(:size)
+    assert_equal 1, json_response['included'].try(:size)
+  end
 end
 
 class DocumentsControllerTest < ActionController::TestCase
   def test_documents_index
     assert_cacheable_get :index
     assert_response :success
-    assert_equal 4, json_response['data'].size
+    assert_equal 5, json_response['data'].size
   end
 
   def test_documents_index_with_polymorphic_include_one_level
     assert_cacheable_get :index, params: {include: 'pictures'}
     assert_response :success
-    assert_equal 4, json_response['data'].size
-    assert_equal 5, json_response['included'].size
+    assert_equal 5, json_response['data'].size
+    assert_equal 6, json_response['included'].size
   end
 end
 
@@ -2122,25 +2279,25 @@ class ExpenseEntriesControllerTest < ActionController::TestCase
   def test_expense_entries_show_bad_include_missing_relationship
     assert_cacheable_get :show, params: {id: 1, include: 'isoCurrencies,employees'}
     assert_response :bad_request
-    assert_match /isoCurrencies is not a valid relationship of expenseEntries/, json_response['errors'][0]['detail']
+    assert_match /isoCurrencies is not a valid includable relationship of expenseEntries/, json_response['errors'][0]['detail']
   end
 
   def test_expense_entries_show_bad_include_missing_sub_relationship
     assert_cacheable_get :show, params: {id: 1, include: 'isoCurrency,employee.post'}
     assert_response :bad_request
-    assert_match /post is not a valid relationship of employees/, json_response['errors'][0]['detail']
+    assert_match /post is not a valid includable relationship of employees/, json_response['errors'][0]['detail']
   end
 
   def test_invalid_include
     assert_cacheable_get :index, params: {include: 'invalid../../../../'}
     assert_response :bad_request
-    assert_match /invalid is not a valid relationship of expenseEntries/, json_response['errors'][0]['detail']
+    assert_match /invalid is not a valid includable relationship of expenseEntries/, json_response['errors'][0]['detail']
   end
 
   def test_invalid_include_long_garbage_string
     assert_cacheable_get :index, params: {include: 'invalid.foo.bar.dfsdfs,dfsdfs.sdfwe.ewrerw.erwrewrew'}
     assert_response :bad_request
-    assert_match /invalid is not a valid relationship of expenseEntries/, json_response['errors'][0]['detail']
+    assert_match /invalid is not a valid includable relationship of expenseEntries/, json_response['errors'][0]['detail']
   end
 
   def test_expense_entries_show_fields
@@ -2542,40 +2699,40 @@ class PeopleControllerTest < ActionController::TestCase
 
     assert_hash_equals(
       {
-        data: {
-          id: '1001',
-          type: 'people',
-          links: {
-              self: 'http://test.host/people/1001'
+        "data" => {
+          "id" => "1001",
+          "type" => "people",
+          "links" => {
+              "self" => "http://test.host/people/1001"
           },
-          attributes: {
-            name: 'Joe Author',
-            email: 'joe@xyz.fake',
-            "date-joined" => '2013-08-07 16:25:00 -0400'
+          "attributes" => {
+            "name" => "Joe Author",
+            "email" => "joe@xyz.fake",
+            "date-joined" => "2013-08-07 16:25:00 -0400"
           },
-          relationships: {
-            comments: {
-              links: {
-                self: 'http://test.host/people/1001/relationships/comments',
-                related: 'http://test.host/people/1001/comments'
+          "relationships" => {
+            "comments" => {
+              "links" => {
+                "self" => "http://test.host/people/1001/relationships/comments",
+                "related" => "http://test.host/people/1001/comments"
               }
             },
-            posts: {
-              links: {
-                self: 'http://test.host/people/1001/relationships/posts',
-                related: 'http://test.host/people/1001/posts'
+            "posts" => {
+              "links" => {
+                "self" => "http://test.host/people/1001/relationships/posts",
+                "related" => "http://test.host/people/1001/posts"
               }
             },
-            preferences: {
-              links: {
-                self: 'http://test.host/people/1001/relationships/preferences',
-                related: 'http://test.host/people/1001/preferences'
+            "preferences" => {
+              "links" => {
+                "self" => "http://test.host/people/1001/relationships/preferences",
+                "related" => "http://test.host/people/1001/preferences"
               }
             },
-            vehicles: {
-              links: {
-                self: "http://test.host/people/1001/relationships/vehicles",
-                related: "http://test.host/people/1001/vehicles"
+            "vehicles" => {
+              "links" => {
+                "self" => "http://test.host/people/1001/relationships/vehicles",
+                "related" => "http://test.host/people/1001/vehicles"
               }
             },
             "hair-cut" => {
@@ -2611,7 +2768,7 @@ class PeopleControllerTest < ActionController::TestCase
   end
 
   def test_show_related_resource_nil
-    get :show_related_resource, params: {post_id: '17', relationship: 'author', source:'posts'}
+    assert_cacheable_get :show_related_resource, params: {post_id: '17', relationship: 'author', source:'posts'}
     assert_response :success
     assert_hash_equals json_response,
                        {
@@ -2658,6 +2815,51 @@ class BooksControllerTest < ActionController::TestCase
     assert_cacheable_get :index
     assert_response :success
     assert json_response['data'][0]['attributes']['title'] = 'Title'
+  end
+end
+
+class Api::V5::PostsControllerTest < ActionController::TestCase
+  def test_show_post_no_relationship_routes_exludes_relationships
+    assert_cacheable_get :show, params: {id: '1'}
+    assert_response :success
+    assert_nil json_response['data']['relationships']
+  end
+
+  def test_exclude_resource_links
+    assert_cacheable_get :show, params: {id: '1'}
+    assert_response :success
+    assert_nil json_response['data']['relationships']
+    assert_equal 1, json_response['data']['links'].length
+
+    Api::V5::PostResource.exclude_links :default
+    assert_cacheable_get :show, params: {id: '1'}
+    assert_response :success
+    assert_nil json_response['data']['relationships']
+    assert_nil json_response['data']['links']
+
+    Api::V5::PostResource.exclude_links [:self]
+    assert_cacheable_get :show, params: {id: '1'}
+    assert_response :success
+    assert_nil json_response['data']['relationships']
+    assert_nil json_response['data']['links']
+
+    Api::V5::PostResource.exclude_links :none
+    assert_cacheable_get :show, params: {id: '1'}
+    assert_response :success
+    assert_nil json_response['data']['relationships']
+    assert_equal 1, json_response['data']['links'].length
+  ensure
+    Api::V5::PostResource.exclude_links :none
+  end
+
+  def test_show_post_no_relationship_route_include
+    get :show, params: {id: '1', include: 'author'}
+    assert_response :success
+    assert_equal '1001', json_response['data']['relationships']['author']['data']['id']
+    assert_nil json_response['data']['relationships']['tags']
+    assert_equal '1001', json_response['included'][0]['id']
+    assert_equal 'people', json_response['included'][0]['type']
+    assert_equal 'joe@xyz.fake', json_response['included'][0]['attributes']['email']
   end
 end
 
@@ -2860,12 +3062,16 @@ end
 
 class Api::V2::PreferencesControllerTest < ActionController::TestCase
   def test_show_singleton_resource_without_id
+    $test_user = Person.find(1001)
+
     assert_cacheable_get :show
     assert_response :success
   end
 
   def test_update_singleton_resource_without_id
     set_content_type_header!
+    $test_user = Person.find(1001)
+
     patch :update, params: {
       data: {
         id: "1",
@@ -2942,7 +3148,7 @@ class FactsControllerTest < ActionController::TestCase
     assert json_response['data'].is_a?(Hash)
     assert_equal 'Jane Author', json_response['data']['attributes']['spouseName']
     assert_equal 'First man to run across Antartica.', json_response['data']['attributes']['bio']
-    assert_equal 23.89/45.6, json_response['data']['attributes']['qualityRating']
+    assert_equal (23.89/45.6).round(5), json_response['data']['attributes']['qualityRating'].round(5)
     assert_equal '47000.56', json_response['data']['attributes']['salary']
     assert_equal '2013-08-07T20:25:00.000Z', json_response['data']['attributes']['dateTimeJoined']
     assert_equal '1965-06-30', json_response['data']['attributes']['birthday']
@@ -3220,10 +3426,10 @@ class Api::V2::BooksControllerTest < ActionController::TestCase
 
     assert_query_count(5) do
       assert_cacheable_get :index, params: {filter: {id: '0'}, include: 'book-comments'}
+      assert_response :success
+      assert_equal 1, json_response['data'].size
+      assert_equal 'Book 0', json_response['data'][0]['attributes']['title']
     end
-    assert_response :success
-    assert_equal 1, json_response['data'].size
-    assert_equal 'Book 0', json_response['data'][0]['attributes']['title']
   end
 
   def test_books_banned_non_book_admin
@@ -3232,11 +3438,11 @@ class Api::V2::BooksControllerTest < ActionController::TestCase
     JSONAPI.configuration.top_level_meta_include_record_count = true
     assert_query_count(3) do
       assert_cacheable_get :index, params: {page: {offset: 50, limit: 12}}
+      assert_response :success
+      assert_equal 12, json_response['data'].size
+      assert_equal 'Book 50', json_response['data'][0]['attributes']['title']
+      assert_equal 901, json_response['meta']['record-count']
     end
-    assert_response :success
-    assert_equal 12, json_response['data'].size
-    assert_equal 'Book 50', json_response['data'][0]['attributes']['title']
-    assert_equal 901, json_response['meta']['record-count']
   ensure
     JSONAPI.configuration.top_level_meta_include_record_count = false
   end
@@ -3247,15 +3453,14 @@ class Api::V2::BooksControllerTest < ActionController::TestCase
     JSONAPI.configuration.top_level_meta_include_record_count = true
     assert_query_count(5) do
       assert_cacheable_get :index, params: {page: {offset: 0, limit: 12}, include: 'book-comments'}
+      assert_response :success
+      assert_equal 12, json_response['data'].size
+      assert_equal 130, json_response['included'].size
+      assert_equal 'Book 0', json_response['data'][0]['attributes']['title']
+      assert_equal 26, json_response['data'][0]['relationships']['book-comments']['data'].size
+      assert_equal 'book-comments', json_response['included'][0]['type']
+      assert_equal 901, json_response['meta']['record-count']
     end
-
-    assert_response :success
-    assert_equal 12, json_response['data'].size
-    assert_equal 130, json_response['included'].size
-    assert_equal 'Book 0', json_response['data'][0]['attributes']['title']
-    assert_equal 26, json_response['data'][0]['relationships']['book-comments']['data'].size
-    assert_equal 'book-comments', json_response['included'][0]['type']
-    assert_equal 901, json_response['meta']['record-count']
   ensure
     JSONAPI.configuration.top_level_meta_include_record_count = false
   end
@@ -3266,12 +3471,12 @@ class Api::V2::BooksControllerTest < ActionController::TestCase
     Api::V2::BookResource.paginator :offset
     assert_query_count(7) do
       assert_cacheable_get :index, params: {page: {offset: 0, limit: 12}, include: 'book-comments.author'}
+      assert_response :success
+      assert_equal 12, json_response['data'].size
+      assert_equal 132, json_response['included'].size
+      assert_equal 'Book 0', json_response['data'][0]['attributes']['title']
+      assert_equal 901, json_response['meta']['record-count']
     end
-    assert_response :success
-    assert_equal 12, json_response['data'].size
-    assert_equal 132, json_response['included'].size
-    assert_equal 'Book 0', json_response['data'][0]['attributes']['title']
-    assert_equal 901, json_response['meta']['record-count']
   ensure
     JSONAPI.configuration.top_level_meta_include_record_count = false
   end
@@ -3468,6 +3673,29 @@ class Api::V2::BookCommentsControllerTest < ActionController::TestCase
   end
 end
 
+class Api::V4::PostsControllerTest < ActionController::TestCase
+  def test_warn_on_joined_to_many
+    original_config = JSONAPI.configuration.dup
+
+    JSONAPI.configuration.warn_on_performance_issues = true
+    _out, err = capture_subprocess_io do
+      get :index, params: {fields: {posts: 'id,title'}}
+      assert_response :success
+    end
+    assert_equal(err, "Performance issue detected: `Api::V4::PostResource.records` returned non-normalized results in `Api::V4::PostResource.find_fragments`.\n")
+
+    JSONAPI.configuration.warn_on_performance_issues = false
+    _out, err = capture_subprocess_io do
+      get :index, params: {fields: {posts: 'id,title'}}
+      assert_response :success
+    end
+    assert_empty err
+
+  ensure
+    JSONAPI.configuration = original_config
+  end
+end
+
 class Api::V4::BooksControllerTest < ActionController::TestCase
   def setup
     JSONAPI.configuration.json_key_format = :camelized_key
@@ -3571,6 +3799,29 @@ class Api::V1::MoonsControllerTest < ActionController::TestCase
                              craters: {links: {self: "http://test.host/api/v1/moons/1/relationships/craters", related: "http://test.host/api/v1/moons/1/craters"}}}
                          }
                        }, json_response)
+  end
+
+  def test_show_related_resource_to_one_linkage_data
+    JSONAPI.configuration.always_include_to_one_linkage_data = true
+
+    assert_cacheable_get :show_related_resource, params: {crater_id: 'S56D', relationship: 'moon', source: "api/v1/craters"}
+    assert_response :success
+    assert_hash_equals({
+                           data: {
+                               id: "1",
+                               type: "moons",
+                               links: {self: "http://test.host/api/v1/moons/1"},
+                               attributes: {name: "Titan", description: "Best known of the Saturn moons."},
+                               relationships: {
+                                   planet: {links: {self: "http://test.host/api/v1/moons/1/relationships/planet",
+                                                    related: "http://test.host/api/v1/moons/1/planet"},
+                                            data: {type: "planets", id: "1"}
+                                   },
+                                   craters: {links: {self: "http://test.host/api/v1/moons/1/relationships/craters", related: "http://test.host/api/v1/moons/1/craters"}}}
+                           }
+                       }, json_response)
+  ensure
+    JSONAPI.configuration.always_include_to_one_linkage_data = false
   end
 
   def test_index_related_resources_with_select_some_db_columns
@@ -3769,6 +4020,16 @@ class Api::V7::CategoriesControllerTest < ActionController::TestCase
     assert_match /Internal Server Error/, json_response['errors'][0]['detail']
   end
 
+  def test_not_allowed_error_in_controller
+    original_config = JSONAPI.configuration.dup
+    JSONAPI.configuration.exception_class_allowlist = []
+    get :show, params: {id: '1'}
+    assert_response 500
+    assert_match /Internal Server Error/, json_response['errors'][0]['detail']
+  ensure
+    JSONAPI.configuration = original_config
+  end
+
   def test_not_whitelisted_error_in_controller
     original_config = JSONAPI.configuration.dup
     JSONAPI.configuration.exception_class_whitelist = []
@@ -3777,6 +4038,18 @@ class Api::V7::CategoriesControllerTest < ActionController::TestCase
     assert_match /Internal Server Error/, json_response['errors'][0]['detail']
   ensure
     JSONAPI.configuration = original_config
+  end
+
+  def test_allowed_error_in_controller
+    original_config = JSONAPI.configuration.dup
+    $PostProcessorRaisesErrors = true
+    JSONAPI.configuration.exception_class_allowlist = [PostsController::SubSpecialError]
+    assert_raises PostsController::SubSpecialError do
+      assert_cacheable_get :show, params: {id: '1'}
+    end
+  ensure
+    JSONAPI.configuration = original_config
+    $PostProcessorRaisesErrors = false
   end
 
   def test_whitelisted_error_in_controller
@@ -3817,7 +4090,7 @@ end
 
 class AuthorsControllerTest < ActionController::TestCase
   def test_show_author_recursive
-    get :show, params: {id: '1002', include: 'books.authors'}
+    assert_cacheable_get :show, params: {id: '1002', include: 'books.authors'}
     assert_response :success
     assert_equal '1002', json_response['data']['id']
     assert_equal 'authors', json_response['data']['type']
@@ -3829,6 +4102,32 @@ class AuthorsControllerTest < ActionController::TestCase
     assert_equal 'authors', json_response['included'][0]['type']
     assert_equal '2', json_response['included'][1]['id']
     assert_equal 'books', json_response['included'][1]['type']
+  end
+
+  def test_show_author_do_not_include_polymorphic_linkage
+    assert_cacheable_get :show, params: {id: '1002', include: 'pictures'}
+    assert_response :success
+    assert_equal '1002', json_response['data']['id']
+    assert_equal 'authors', json_response['data']['type']
+    assert_equal 'Fred Reader', json_response['data']['attributes']['name']
+    assert json_response['included'][0]['relationships']['imageable']['links']
+    refute json_response['included'][0]['relationships']['imageable']['data']
+  end
+
+  def test_show_author_include_polymorphic_linkage
+    JSONAPI.configuration.always_include_to_one_linkage_data = true
+
+    assert_cacheable_get :show, params: {id: '1002', include: 'pictures'}
+    assert_response :success
+    assert_equal '1002', json_response['data']['id']
+    assert_equal 'authors', json_response['data']['type']
+    assert_equal 'Fred Reader', json_response['data']['attributes']['name']
+    assert json_response['included'][0]['relationships']['imageable']['links']
+    assert json_response['included'][0]['relationships']['imageable']['data']
+    assert_equal 'products', json_response['included'][0]['relationships']['imageable']['data']['type']
+    assert_equal '1', json_response['included'][0]['relationships']['imageable']['data']['id']
+  ensure
+    JSONAPI.configuration.always_include_to_one_linkage_data = false
   end
 end
 
@@ -3876,48 +4175,565 @@ class Api::BoxesControllerTest < ActionController::TestCase
     assert_equal 'things', json_response['included'][1]['type']
     assert_equal '10001', json_response['included'][1]['relationships']['user']['data']['id']
     assert_nil json_response['included'][1]['relationships']['things']['data']
-
-    assert_equal '10001', json_response['included'][2]['id']
-    assert_equal 'users', json_response['included'][2]['type']
   end
 
   def test_complex_includes_things_nested_things
-    get :index, params: {include: 'things,things.things'}
+    assert_cacheable_get :index, params: {include: 'things,things.things,things.things.things'}
 
     assert_response :success
+    assert_hash_equals(
+        {
+            "data" => [
+                {
+                    "id" => "100",
+                    "type" => "boxes",
+                    "links" => {
+                        "self" => "http://test.host/api/boxes/100"
+                    },
+                    "relationships" => {
+                        "things" => {
+                            "links" => {
+                                "self" => "http://test.host/api/boxes/100/relationships/things",
+                                "related" => "http://test.host/api/boxes/100/things"
+                            },
+                            "data" => [
+                                {
+                                    "type" => "things",
+                                    "id" => "10"
+                                },
+                                {
+                                    "type" => "things",
+                                    "id" => "20"
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "id" => "102",
+                    "type" => "boxes",
+                    "links" => {
+                        "self" => "http://test.host/api/boxes/102"
+                    },
+                    "relationships" => {
+                        "things" => {
+                            "links" => {
+                                "self" => "http://test.host/api/boxes/102/relationships/things",
+                                "related" => "http://test.host/api/boxes/102/things"
+                            },
+                            "data" => [
+                                {
+                                    "type" => "things",
+                                    "id" => "30"
+                                }
+                            ]
+                        }
+                    }
+                }
+            ],
+            "included" => [
+                {
+                    "id" => "10",
+                    "type" => "things",
+                    "links" => {
+                        "self" => "http://test.host/api/things/10"
+                    },
+                    "relationships" => {
+                        "box" => {
+                            "links" => {
+                                "self" => "http://test.host/api/things/10/relationships/box",
+                                "related" => "http://test.host/api/things/10/box"
+                            },
+                            "data" => {
+                                "type" => "boxes",
+                                "id" => "100"
+                            }
+                        },
+                        "user" => {
+                            "links" => {
+                                "self" => "http://test.host/api/things/10/relationships/user",
+                                "related" => "http://test.host/api/things/10/user"
+                            }
+                        },
+                        "things" => {
+                            "links" => {
+                                "self" => "http://test.host/api/things/10/relationships/things",
+                                "related" => "http://test.host/api/things/10/things"
+                            },
+                            "data" => [
+                                {
+                                    "type" => "things",
+                                    "id" => "20"
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "id" => "20",
+                    "type" => "things",
+                    "links" => {
+                        "self" => "http://test.host/api/things/20"
+                    },
+                    "relationships" => {
+                        "box" => {
+                            "links" => {
+                                "self" => "http://test.host/api/things/20/relationships/box",
+                                "related" => "http://test.host/api/things/20/box"
+                            },
+                            "data" => {
+                                "type" => "boxes",
+                                "id" => "100"
+                            }
+                        },
+                        "user" => {
+                            "links" => {
+                                "self" => "http://test.host/api/things/20/relationships/user",
+                                "related" => "http://test.host/api/things/20/user"
+                            }
+                        },
+                        "things" => {
+                            "links" => {
+                                "self" => "http://test.host/api/things/20/relationships/things",
+                                "related" => "http://test.host/api/things/20/things"
+                            },
+                            "data" => [
+                                {
+                                    "type" => "things",
+                                    "id" => "10"
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "id" => "30",
+                    "type" => "things",
+                    "links" => {
+                        "self" => "http://test.host/api/things/30"
+                    },
+                    "relationships" => {
+                        "box" => {
+                            "links" => {
+                                "self" => "http://test.host/api/things/30/relationships/box",
+                                "related" => "http://test.host/api/things/30/box"
+                            },
+                            "data" => {
+                                "type" => "boxes",
+                                "id" => "102"
+                            }
+                        },
+                        "user" => {
+                            "links" => {
+                                "self" => "http://test.host/api/things/30/relationships/user",
+                                "related" => "http://test.host/api/things/30/user"
+                            }
+                        },
+                        "things" => {
+                            "links" => {
+                                "self" => "http://test.host/api/things/30/relationships/things",
+                                "related" => "http://test.host/api/things/30/things"
+                            },
+                            "data" => [
+                                {
+                                    "type" => "things",
+                                    "id" => "40"
+                                },
+                                {
+                                    "type" => "things",
+                                    "id" => "50"
+                                }
 
-    # The test is hardcoded with the include order. This should be changed at some
-    # point since either thing could come first and still be valid
-    assert_equal '10', json_response['included'][0]['id']
-    assert_equal 'things', json_response['included'][0]['type']
-    assert_nil json_response['included'][0]['relationships']['user']['data']
-    assert_equal '20', json_response['included'][0]['relationships']['things']['data'][0]['id']
-
-    assert_equal '20', json_response['included'][1]['id']
-    assert_equal 'things', json_response['included'][1]['type']
-    assert_nil json_response['included'][1]['relationships']['user']['data']
-    assert_equal '10', json_response['included'][1]['relationships']['things']['data'][0]['id']
+                            ]
+                        }
+                    }
+                },
+                {
+                    "id" => "40",
+                    "type" => "things",
+                    "links" => {
+                        "self" => "http://test.host/api/things/40"
+                    },
+                    "relationships" => {
+                        "box" => {
+                            "links" => {
+                                "self" => "http://test.host/api/things/40/relationships/box",
+                                "related" => "http://test.host/api/things/40/box"
+                            }
+                        },
+                        "user" => {
+                            "links" => {
+                                "self" => "http://test.host/api/things/40/relationships/user",
+                                "related" => "http://test.host/api/things/40/user"
+                            }
+                        },
+                        "things" => {
+                            "links" => {
+                                "self" => "http://test.host/api/things/40/relationships/things",
+                                "related" => "http://test.host/api/things/40/things"
+                            },
+                            "data"=>[]
+                        }
+                    }
+                },
+                {
+                    "id" => "50",
+                    "type" => "things",
+                    "links" => {
+                        "self" => "http://test.host/api/things/50"
+                    },
+                    "relationships" => {
+                        "box" => {
+                            "links" => {
+                                "self" => "http://test.host/api/things/50/relationships/box",
+                                "related" => "http://test.host/api/things/50/box"
+                            }
+                        },
+                        "user" => {
+                            "links" => {
+                                "self" => "http://test.host/api/things/50/relationships/user",
+                                "related" => "http://test.host/api/things/50/user"
+                            }
+                        },
+                        "things" => {
+                            "links" => {
+                                "self" => "http://test.host/api/things/50/relationships/things",
+                                "related" => "http://test.host/api/things/50/things"
+                            },
+                            "data" => [
+                                {
+                                    "type" => "things",
+                                    "id" => "60"
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "id" => "60",
+                    "type" => "things",
+                    "links" => {
+                        "self" => "http://test.host/api/things/60"
+                    },
+                    "relationships" => {
+                        "box" => {
+                            "links" => {
+                                "self" => "http://test.host/api/things/60/relationships/box",
+                                "related" => "http://test.host/api/things/60/box"
+                            }
+                        },
+                        "user" => {
+                            "links" => {
+                                "self" => "http://test.host/api/things/60/relationships/user",
+                                "related" => "http://test.host/api/things/60/user"
+                            }
+                        },
+                        "things" => {
+                            "links" => {
+                                "self" => "http://test.host/api/things/60/relationships/things",
+                                "related" => "http://test.host/api/things/60/things"
+                            }
+                        }
+                    }
+                }
+            ]
+        },
+        json_response)
   end
 
   def test_complex_includes_nested_things_secondary_users
-    get :index, params: {include: 'things,things.user,things.things'}
+    assert_cacheable_get :index, params: {include: 'things,things.user,things.things'}
 
     assert_response :success
+    assert_hash_equals(
+        {
+            "data" => [
+                {
+                    "id" => "100",
+                    "type" => "boxes",
+                    "links" => {
+                        "self" => "http://test.host/api/boxes/100"
+                    },
+                    "relationships" => {
+                        "things" => {
+                            "links" => {
+                                "self" => "http://test.host/api/boxes/100/relationships/things",
+                                "related" => "http://test.host/api/boxes/100/things"
+                            },
+                            "data" => [
+                                {
+                                    "type" => "things",
+                                    "id" => "10"
+                                },
+                                {
+                                    "type" => "things",
+                                    "id" => "20"
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "id" => "102",
+                    "type" => "boxes",
+                    "links" => {
+                        "self" => "http://test.host/api/boxes/102"
+                    },
+                    "relationships" => {
+                        "things" => {
+                            "links" => {
+                                "self" => "http://test.host/api/boxes/102/relationships/things",
+                                "related" => "http://test.host/api/boxes/102/things"
+                            },
+                            "data" => [
+                                {
+                                    "type" => "things",
+                                    "id" => "30"
+                                }
+                            ]
+                        }
+                    }
+                }
+            ],
+            "included" => [
+                {
+                    "id" => "10",
+                    "type" => "things",
+                    "links" => {
+                        "self" => "http://test.host/api/things/10"
+                    },
+                    "relationships" => {
+                        "box" => {
+                            "links" => {
+                                "self" => "http://test.host/api/things/10/relationships/box",
+                                "related" => "http://test.host/api/things/10/box"
+                            },
+                            "data" => {
+                                "type" => "boxes",
+                                "id" => "100"
+                            }
+                        },
+                        "user" => {
+                            "links" => {
+                                "self" => "http://test.host/api/things/10/relationships/user",
+                                "related" => "http://test.host/api/things/10/user"
+                            },
+                            "data" => {
+                                "type" => "users",
+                                "id" => "10001"
+                            }
+                        },
+                        "things" => {
+                            "links" => {
+                                "self" => "http://test.host/api/things/10/relationships/things",
+                                "related" => "http://test.host/api/things/10/things"
+                            },
+                            "data" => [
+                                {
+                                    "type" => "things",
+                                    "id" => "20"
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "id" => "20",
+                    "type" => "things",
+                    "links" => {
+                        "self" => "http://test.host/api/things/20"
+                    },
+                    "relationships" => {
+                        "box" => {
+                            "links" => {
+                                "self" => "http://test.host/api/things/20/relationships/box",
+                                "related" => "http://test.host/api/things/20/box"
+                            },
+                            "data" => {
+                                "type" => "boxes",
+                                "id" => "100"
+                            }
+                        },
+                        "user" => {
+                            "links" => {
+                                "self" => "http://test.host/api/things/20/relationships/user",
+                                "related" => "http://test.host/api/things/20/user"
+                            },
+                            "data" => {
+                                "type" => "users",
+                                "id" => "10001"
+                            }
+                        },
+                        "things" => {
+                            "links" => {
+                                "self" => "http://test.host/api/things/20/relationships/things",
+                                "related" => "http://test.host/api/things/20/things"
+                            },
+                            "data" => [
+                                {
+                                    "type" => "things",
+                                    "id" => "10"
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "id" => "30",
+                    "type" => "things",
+                    "links" => {
+                        "self" => "http://test.host/api/things/30"
+                    },
+                    "relationships" => {
+                        "box" => {
+                            "links" => {
+                                "self" => "http://test.host/api/things/30/relationships/box",
+                                "related" => "http://test.host/api/things/30/box"
+                            },
+                            "data" => {
+                                "type" => "boxes",
+                                "id" => "102"
+                            }
+                        },
+                        "user" => {
+                            "links" => {
+                                "self" => "http://test.host/api/things/30/relationships/user",
+                                "related" => "http://test.host/api/things/30/user"
+                            },
+                            "data" => {
+                                "type" => "users",
+                                "id" => "10002"
+                            }
 
-    # The test is hardcoded with the include order. This should be changed at some
-    # point since either thing could come first and still be valid
-    assert_equal '10', json_response['included'][0]['id']
-    assert_equal 'things', json_response['included'][0]['type']
-    assert_equal '10001',  json_response['included'][0]['relationships']['user']['data']['id']
-    assert_equal '20',  json_response['included'][0]['relationships']['things']['data'][0]['id']
+                        },
+                        "things" => {
+                            "links" => {
+                                "self" => "http://test.host/api/things/30/relationships/things",
+                                "related" => "http://test.host/api/things/30/things"
+                            },
+                            "data" => [
+                                {
+                                    "type" => "things",
+                                    "id" => "40"
+                                },
+                                {
+                                    "type" => "things",
+                                    "id" => "50"
+                                }
 
-    assert_equal '20', json_response['included'][1]['id']
-    assert_equal 'things', json_response['included'][1]['type']
-    assert_equal '10001',  json_response['included'][1]['relationships']['user']['data']['id']
-    assert_equal '10',  json_response['included'][1]['relationships']['things']['data'][0]['id']
-
-    assert_equal '10001', json_response['included'][2]['id']
-    assert_equal 'users', json_response['included'][2]['type']
+                            ]
+                        }
+                    }
+                },
+                {
+                    "id" => "40",
+                    "type" => "things",
+                    "links" => {
+                        "self" => "http://test.host/api/things/40"
+                    },
+                    "relationships" => {
+                        "box" => {
+                            "links" => {
+                                "self" => "http://test.host/api/things/40/relationships/box",
+                                "related" => "http://test.host/api/things/40/box"
+                            }
+                        },
+                        "user" => {
+                            "links" => {
+                                "self" => "http://test.host/api/things/40/relationships/user",
+                                "related" => "http://test.host/api/things/40/user"
+                            }
+                        },
+                        "things" => {
+                            "links" => {
+                                "self" => "http://test.host/api/things/40/relationships/things",
+                                "related" => "http://test.host/api/things/40/things"
+                            }
+                        }
+                    }
+                },
+                {
+                    "id" => "50",
+                    "type" => "things",
+                    "links" => {
+                        "self" => "http://test.host/api/things/50"
+                    },
+                    "relationships" => {
+                        "box" => {
+                            "links" => {
+                                "self" => "http://test.host/api/things/50/relationships/box",
+                                "related" => "http://test.host/api/things/50/box"
+                            }
+                        },
+                        "user" => {
+                            "links" => {
+                                "self" => "http://test.host/api/things/50/relationships/user",
+                                "related" => "http://test.host/api/things/50/user"
+                            }
+                        },
+                        "things" => {
+                            "links" => {
+                                "self" => "http://test.host/api/things/50/relationships/things",
+                                "related" => "http://test.host/api/things/50/things"
+                            }
+                        }
+                    }
+                },
+                {
+                    "id" => "10001",
+                    "type" => "users",
+                    "links" => {
+                        "self" => "http://test.host/api/users/10001"
+                    },
+                    "attributes" => {
+                        "name" => "user 1"
+                    },
+                    "relationships" => {
+                        "things" => {
+                            "links" => {
+                                "self" => "http://test.host/api/users/10001/relationships/things",
+                                "related" => "http://test.host/api/users/10001/things"
+                            },
+                            "data" => [
+                                {
+                                    "type" => "things",
+                                    "id" => "10"
+                                },
+                                {
+                                    "type" => "things",
+                                    "id" => "20"
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "id" => "10002",
+                    "type" => "users",
+                    "links" => {
+                        "self" => "http://test.host/api/users/10002"
+                    },
+                    "attributes" => {
+                        "name" => "user 2"
+                    },
+                    "relationships" => {
+                        "things" => {
+                            "links" => {
+                                "self" => "http://test.host/api/users/10002/relationships/things",
+                                "related" => "http://test.host/api/users/10002/things"
+                            },
+                            "data" => [
+                                {
+                                    "type" => "things",
+                                    "id" => "30"
+                                }
+                            ]
+                        }
+                    }
+                }
+            ]
+        },
+        json_response)
   end
 end
 
@@ -3944,49 +4760,6 @@ class BlogPostsControllerTest < ActionController::TestCase
   end
 end
 
-class WidgetsControllerTest < ActionController::TestCase
-  def teardown
-    Widget.delete_all
-    Indicator.delete_all
-    Agency.delete_all
-  end
-
-  def test_fetch_widgets_sort_by_agency_name
-    agency_1 = Agency.create! name: 'beta'
-    agency_2 = Agency.create! name: 'alpha'
-    indicator_1 = Indicator.create! name: 'bar', agency: agency_1
-    indicator_2 = Indicator.create! name: 'foo', agency: agency_2
-    Widget.create! name: 'bar', indicator: indicator_1
-    widget = Widget.create! name: 'foo', indicator: indicator_2
-    assert_cacheable_get :index, params: {sort: 'indicator.agency.name'}
-    assert_response :success
-    assert_equal widget.id.to_s, json_response['data'].first['id']
-  end
-end
-
-class IndicatorsControllerTest < ActionController::TestCase
-  def teardown
-    Widget.delete_all
-    Indicator.delete_all
-    Agency.delete_all
-  end
-
-  def test_fetch_indicators_sort_by_widgets_name
-    agency = Agency.create! name: 'test'
-    indicator_1 = Indicator.create! name: 'bar', agency: agency
-    indicator_2 = Indicator.create! name: 'foo', agency: agency
-    Widget.create! name: 'omega', indicator: indicator_1
-    Widget.create! name: 'beta', indicator: indicator_1
-    Widget.create! name: 'alpha', indicator: indicator_2
-    Widget.create! name: 'zeta', indicator: indicator_2
-    assert_cacheable_get :index, params: {sort: 'widgets.name'}
-    assert_response :success
-    assert_equal indicator_2.id.to_s, json_response['data'].first['id']
-    assert_equal 2, json_response['data'].size
-  end
-
-end
-
 class RobotsControllerTest < ActionController::TestCase
 
   def teardown
@@ -3998,7 +4771,12 @@ class RobotsControllerTest < ActionController::TestCase
     Robot.create! name: 'jane', version: 1
     assert_cacheable_get :index, params: {sort: 'name'}
     assert_response :success
-    assert_equal 'John', json_response['data'].first['attributes']['name']
+
+    if ENV['DATABASE_URL'].starts_with?('postgres')
+      assert_equal 'jane', json_response['data'].first['attributes']['name']
+    else
+      assert_equal 'John', json_response['data'].first['attributes']['name']
+    end
   end
 
   def test_fetch_robots_with_sort_by_lower_name
@@ -4016,5 +4794,35 @@ class RobotsControllerTest < ActionController::TestCase
     assert_response 400
     assert_equal 'version is not a valid sort criteria for robots', json_response['errors'].first['detail']
   end
+end
 
+class Api::V6::AuthorDetailsControllerTest < ActionController::TestCase
+  def after_teardown
+    Api::V6::AuthorDetailResource.paginator :none # TODO: ???
+  end
+
+  def test_that_the_last_two_author_details_belong_to_an_author
+    Api::V6::AuthorDetailResource.paginator :offset
+
+    total_count = AuthorDetail.count
+    assert_operator total_count, :>=, 2
+
+    assert_cacheable_get :index, params: {sort: :id, include: :author, page: {limit: 10, offset: total_count - 2}}
+    assert_response :success
+    assert_equal 2, json_response['data'].size
+    assert_not_nil json_response['data'][0]['relationships']['author']['data']
+    assert_not_nil json_response['data'][1]['relationships']['author']['data']
+  end
+
+  def test_that_the_last_author_detail_includes_its_author_even_if_returned_as_the_single_entry_on_a_page_with_nonzero_offset
+    Api::V6::AuthorDetailResource.paginator :offset
+
+    total_count = AuthorDetail.count
+    assert_operator total_count, :>=, 2
+
+    assert_cacheable_get :index, params: {sort: :id, include: :author, page: {limit: 10, offset: total_count - 1}}
+    assert_response :success
+    assert_equal 1, json_response['data'].size
+    assert_not_nil json_response['data'][0]['relationships']['author']['data']
+  end
 end

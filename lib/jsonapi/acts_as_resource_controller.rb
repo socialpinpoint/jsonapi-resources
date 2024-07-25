@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require 'csv'
 
 module JSONAPI
@@ -13,7 +15,7 @@ module JSONAPI
                                               :transaction
     end
 
-    attr_reader :response_document
+    attr_reader :response_document, :jsonapi_request
 
     def index
       process_request
@@ -60,59 +62,70 @@ module JSONAPI
     end
 
     def get_related_resource
-      ActiveSupport::Deprecation.warn "In #{self.class.name} you exposed a `get_related_resource`"\
+      # :nocov:
+    ActiveSupport::Deprecation.warn "In #{self.class.name} you exposed a `get_related_resource`"\
                                       " action. Please use `show_related_resource` instead."
       show_related_resource
+      # :nocov:
     end
 
     def get_related_resources
+      # :nocov:
       ActiveSupport::Deprecation.warn "In #{self.class.name} you exposed a `get_related_resources`"\
-                                      " action. Please use `index_related_resource` instead."
+                                      " action. Please use `index_related_resources` instead."
       index_related_resources
+      # :nocov:
     end
 
     def process_request
-      @response_document = create_response_document
-
-      unless verify_content_type_header && verify_accept_header
-        render_response_document
-        return
-      end
-
-      request_parser = JSONAPI::RequestParser.new(
-          params,
-          context: context,
-          key_formatter: key_formatter,
-          server_error_callbacks: (self.class.server_error_callbacks || []))
-
-      transactional = request_parser.transactional?
-
       begin
-        process_operations(transactional) do
-          run_callbacks :process_operations do
-            request_parser.each(response_document) do |op|
-              op.options[:serializer] = resource_serializer_klass.new(
-                  op.resource_klass,
-                  include_directives: op.options[:include_directives],
-                  fields: op.options[:fields],
-                  base_url: base_url,
-                  key_formatter: key_formatter,
-                  route_formatter: route_formatter,
-                  serialization_options: serialization_options
-              )
-              op.options[:cache_serializer_output] = !JSONAPI.configuration.resource_cache.nil?
-
-              process_operation(op)
-            end
-          end
-          if response_document.has_errors?
-            raise ActiveRecord::Rollback
-          end
-        end
+        setup_response_document
+        verify_content_type_header
+        verify_accept_header
+        parse_request
+        execute_request
       rescue => e
         handle_exceptions(e)
       end
       render_response_document
+    end
+
+    def setup_response_document
+      @response_document = create_response_document
+    end
+
+    def parse_request
+      @jsonapi_request = JSONAPI::Request.new(
+        params,
+        context: context,
+        key_formatter: key_formatter,
+        server_error_callbacks: (self.class.server_error_callbacks || []))
+      fail JSONAPI::Exceptions::Errors.new(@jsonapi_request.errors) if @jsonapi_request.errors.any?
+    end
+
+    def execute_request
+      process_operations(jsonapi_request.transactional?) do
+        run_callbacks :process_operations do
+          jsonapi_request.operations.each do |op|
+            op.options[:serializer] = resource_serializer_klass.new(
+              op.resource_klass,
+              include_directives: op.options[:include_directives],
+              fields: op.options[:fields],
+              base_url: base_url,
+              key_formatter: key_formatter,
+              route_formatter: route_formatter,
+              serialization_options: serialization_options,
+              controller: self
+            )
+            op.options[:cache_serializer_output] = !JSONAPI.configuration.resource_cache.nil?
+
+            process_operation(op)
+          end
+        end
+        if response_document.has_errors?
+          raise ActiveRecord::Rollback
+        end
+      end
     end
 
     def process_operations(transactional)
@@ -147,7 +160,7 @@ module JSONAPI
     end
 
     def base_url
-      @base_url ||= request.protocol + request.host_with_port
+      @base_url ||= "#{request.protocol}#{request.host_with_port}#{Rails.application.config.relative_url_root}"
     end
 
     def resource_klass_name
@@ -156,24 +169,16 @@ module JSONAPI
 
     def verify_content_type_header
       if ['create', 'create_relationship', 'update_relationship', 'update'].include?(params[:action])
-        unless request.content_type == JSONAPI::MEDIA_TYPE
-          fail JSONAPI::Exceptions::UnsupportedMediaTypeError.new(request.content_type)
+        unless request.media_type == JSONAPI::MEDIA_TYPE
+          fail JSONAPI::Exceptions::UnsupportedMediaTypeError.new(request.media_type)
         end
       end
-      true
-    rescue => e
-      handle_exceptions(e)
-      false
     end
 
     def verify_accept_header
       unless valid_accept_media_type?
         fail JSONAPI::Exceptions::NotAcceptableError.new(request.accept)
       end
-      true
-    rescue => e
-      handle_exceptions(e)
-      false
     end
 
     def valid_accept_media_type?
@@ -184,7 +189,7 @@ module JSONAPI
       end
     end
 
-  def media_types_for(header)
+    def media_types_for(header)
       (request.headers[header] || '')
         .scan(MEDIA_TYPE_MATCHER)
         .to_a
@@ -268,7 +273,7 @@ module JSONAPI
         when ActionController::ParameterMissing
           errors = JSONAPI::Exceptions::ParameterMissing.new(e.param).errors
         else
-          if JSONAPI.configuration.exception_class_whitelisted?(e)
+          if JSONAPI.configuration.exception_class_allowed?(e)
             raise e
           else
             if self.class.server_error_callbacks
@@ -303,7 +308,7 @@ module JSONAPI
     # caught that is not a JSONAPI::Exceptions::Error
     # Useful for additional logging or notification configuration that
     # would normally depend on rails catching and rendering an exception.
-    # Ignores whitelist exceptions from config
+    # Ignores allowlist exceptions from config
 
     module ClassMethods
 

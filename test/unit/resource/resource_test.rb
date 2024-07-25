@@ -13,7 +13,7 @@ class PostWithBadAfterSave < ActiveRecord::Base
   after_save :do_some_after_save_stuff
 
   def do_some_after_save_stuff
-    errors[:base] << 'Boom! Error added in after_save callback.'
+    errors.add(:base, 'Boom! Error added in after_save callback.')
     raise ActiveRecord::RecordInvalid.new(self)
   end
 end
@@ -23,7 +23,7 @@ class PostWithCustomValidationContext < ActiveRecord::Base
   validate :api_specific_check, on: :json_api_create
 
   def api_specific_check
-    errors[:base] << 'Record is invalid'
+    errors.add(:base, 'Record is invalid')
   end
 end
 
@@ -58,27 +58,7 @@ class FelineResource < JSONAPI::Resource
   has_one :father, class_name: 'Cat'
 end
 
-class PersonWithCustomRecordsForResource < PersonResource
-  def records_for(relationship_name)
-    :records_for
-  end
-end
-
-class PersonWithCustomRecordsForRelationshipsResource < PersonResource
-  def records_for_posts
-    :records_for_posts
-  end
-
-  def record_for_preferences
-    :record_for_preferences
-  end
-end
-
-class PersonWithCustomRecordsForErrorResource < PersonResource
-  class AuthorizationError < StandardError; end
-  def records_for(relationship_name)
-    raise AuthorizationError
-  end
+class TestSingletonResource < JSONAPI::Resource
 end
 
 module MyModule
@@ -193,15 +173,17 @@ class ResourceTest < ActiveSupport::TestCase
     refute PersonResource._abstract
   end
 
+  def test_inherited_calls_superclass
+    subclasses = BaseResource.subclasses
+    assert_includes(subclasses, PersonResource)
+    assert_includes(subclasses, SpecialBaseResource)
+    assert_equal(2, subclasses.size)
+  end
+
   def test_nil_model_class
-    # ToDo:Figure out why this test does not work on Rails 4.0
-    # :nocov:
-    if (Rails::VERSION::MAJOR >= 4 && Rails::VERSION::MINOR >= 1) || (Rails::VERSION::MAJOR >= 5)
-      assert_output nil, "[MODEL NOT FOUND] Model could not be found for NoMatchResource. If this is a base Resource declare it as abstract.\n" do
-        assert_nil NoMatchResource._model_class
-      end
+    assert_output nil, "[MODEL NOT FOUND] Model could not be found for NoMatchResource. If this is a base Resource declare it as abstract.\n" do
+      assert_nil NoMatchResource._model_class
     end
-    # :nocov:
   end
 
   def test_nil_abstract_model_class
@@ -244,7 +226,7 @@ class ResourceTest < ActiveSupport::TestCase
 
   def test_find_with_customized_base_records
     author = Person.find(1001)
-    posts = ArticleResource.find([], context: author).map(&:_model)
+    posts = ArticleResource.find({}, context: author).map(&:_model)
 
     assert(posts.include?(Post.find(1)))
     refute(posts.include?(Post.find(3)))
@@ -281,37 +263,37 @@ class ResourceTest < ActiveSupport::TestCase
   end
 
   def test_filter_on_has_one_relationship_id
-    people = PreferencesResource.find(:author => 1)
-    assert_equal([1], people.map(&:id))
+    prefs = PreferencesResource.find(:author => 1001)
+    assert_equal([1], prefs.map(&:id))
   end
 
   def test_to_many_relationship_filters
     post_resource = PostResource.new(Post.find(1), nil)
 
-    comments = PostResource.find_related_fragments([post_resource.identity], :comments)
+    comments = PostResource.find_included_fragments([post_resource], :comments, {})
     assert_equal(2, comments.size)
 
-    filtered_comments = PostResource.find_related_fragments([post_resource.identity], :comments, { filters: { body: 'i liked it' } })
+    filtered_comments = PostResource.find_included_fragments([post_resource], :comments, { filters: { body: 'i liked it' } })
     assert_equal(1, filtered_comments.size)
   end
 
   def test_to_many_relationship_sorts
     post_resource = PostResource.new(Post.find(1), nil)
-    comment_ids = post_resource.class.find_related_fragments([post_resource.identity], :comments).keys.collect {|c| c.id }
+    comment_ids = post_resource.class.find_included_fragments([post_resource], :comments, {}).keys.collect {|c| c.id }
     assert_equal [1,2], comment_ids
 
     # define apply_filters method on post resource to sort descending
     PostResource.instance_eval do
-      def apply_sort(records, criteria, context = {})
+      def apply_sort(records, _order_options, options)
         # :nocov:
-        order_by_query = 'id desc'
+        order_by_query = "#{options[:related_alias]}.id desc"
         records.order(order_by_query)
         # :nocov:
       end
     end
 
-    sorted_comment_ids = post_resource.class.find_related_fragments(
-        [post_resource.identity],
+    sorted_comment_ids = post_resource.class.find_included_fragments(
+        [post_resource],
         :comments,
         { sort_criteria: [{ field: 'id', direction: :desc }] }).keys.collect {|c| c.id}
 
@@ -322,56 +304,13 @@ class ResourceTest < ActiveSupport::TestCase
       def apply_sort(records, order_options, context = {})
         if order_options.any?
           order_options.each_pair do |field, direction|
-            if field.to_s.include?(".")
-              *model_names, column_name = field.split(".")
-
-              associations = _lookup_association_chain([records.model.to_s, *model_names])
-              joins_query = _build_joins([records.model, *associations])
-
-              # _sorting is appended to avoid name clashes with manual joins eg. overridden filters
-              order_by_query = "#{associations.last.name}_sorting.#{column_name} #{direction}"
-              records = records.joins(joins_query).order(order_by_query)
-            else
-              field = _attribute_delegated_name(field)
-              records = records.order(field => direction)
-            end
+            records = apply_single_sort(records, field, direction, context)
           end
         end
 
         records
       end
     end
-  end
-
-  def test_lookup_association_chain
-    model_names = %w(person posts parent_post)
-    result = PersonResource._lookup_association_chain(model_names)
-    assert_equal 2, result.length
-
-    posts_reflection, parent_post_reflection = result
-    assert_equal :posts, posts_reflection.name
-    assert_equal :parent_post, parent_post_reflection.name
-
-    assert_equal "posts", posts_reflection.table_name
-    assert_equal "posts", parent_post_reflection.table_name
-
-    assert_equal "author_id", posts_reflection.foreign_key
-    assert_equal "parent_post_id", parent_post_reflection.foreign_key
-  end
-
-  def test_build_joins
-    model_names = %w(person posts parent_post author author_detail)
-    associations = PersonResource._lookup_association_chain(model_names)
-    result = PersonResource.send(:_build_joins, [Person, *associations])
-
-    sql = [
-        'LEFT JOIN posts AS posts_sorting ON posts_sorting.author_id = people.id',
-        'LEFT JOIN posts AS parent_post_sorting ON parent_post_sorting.id = posts_sorting.parent_post_id',
-        'LEFT JOIN people AS author_sorting ON author_sorting.id = parent_post_sorting.author_id',
-        'LEFT JOIN author_details AS author_detail_sorting ON author_detail_sorting.person_id = author_sorting.id'
-    ].join("\n")
-
-    assert_equal sql, result
   end
 
   # ToDo: Implement relationship pagination
@@ -625,5 +564,84 @@ class ResourceTest < ActiveSupport::TestCase
     assert(PostResource.sortable_field?(:title))
     assert(PostResource.sortable_field?(:body))
     refute(PostResource.sortable_field?(:color))
+  end
+
+  def test_exclude_links_on_resource
+    Api::V5::PostResource.exclude_links :none
+    assert_equal [], Api::V5::PostResource._exclude_links
+    refute Api::V5::PostResource.exclude_link?(:self)
+    refute Api::V5::PostResource.exclude_link?("self")
+
+    Api::V5::PostResource.exclude_links :default
+    assert_equal [:self], Api::V5::PostResource._exclude_links
+    assert Api::V5::PostResource.exclude_link?(:self)
+    assert Api::V5::PostResource.exclude_link?("self")
+
+    Api::V5::PostResource.exclude_links "none"
+    assert_equal [], Api::V5::PostResource._exclude_links
+    refute Api::V5::PostResource.exclude_link?(:self)
+    refute Api::V5::PostResource.exclude_link?("self")
+
+    Api::V5::PostResource.exclude_links "default"
+    assert_equal [:self], Api::V5::PostResource._exclude_links
+    assert Api::V5::PostResource.exclude_link?(:self)
+    assert Api::V5::PostResource.exclude_link?("self")
+
+    Api::V5::PostResource.exclude_links :none
+    assert_equal [], Api::V5::PostResource._exclude_links
+    refute Api::V5::PostResource.exclude_link?(:self)
+    refute Api::V5::PostResource.exclude_link?("self")
+
+    Api::V5::PostResource.exclude_links [:self]
+    assert_equal [:self], Api::V5::PostResource._exclude_links
+    assert Api::V5::PostResource.exclude_link?(:self)
+    assert Api::V5::PostResource.exclude_link?("self")
+
+    Api::V5::PostResource.exclude_links :none
+    assert_equal [], Api::V5::PostResource._exclude_links
+    refute Api::V5::PostResource.exclude_link?(:self)
+    refute Api::V5::PostResource.exclude_link?("self")
+
+    Api::V5::PostResource.exclude_links ["self"]
+    assert_equal [:self], Api::V5::PostResource._exclude_links
+    assert Api::V5::PostResource.exclude_link?(:self)
+    assert Api::V5::PostResource.exclude_link?("self")
+
+    Api::V5::PostResource.exclude_links []
+    assert_equal [], Api::V5::PostResource._exclude_links
+    refute Api::V5::PostResource.exclude_link?(:self)
+    refute Api::V5::PostResource.exclude_link?("self")
+
+    assert_raises do
+      Api::V5::PostResource.exclude_links :self
+    end
+
+  ensure
+    Api::V5::PostResource.exclude_links :none
+  end
+
+  def test_singleton_options
+    TestSingletonResource.singleton true
+    assert TestSingletonResource.singleton?
+    assert TestSingletonResource._singleton_options.blank?
+
+    TestSingletonResource.singleton false
+    refute TestSingletonResource.singleton?
+    assert TestSingletonResource._singleton_options.blank?
+
+    TestSingletonResource.singleton true, a: :b
+    assert TestSingletonResource.singleton?
+    refute TestSingletonResource._singleton_options.blank?
+    assert_equal :b, TestSingletonResource._singleton_options[:a]
+
+    TestSingletonResource.singleton false, c: :d
+    refute TestSingletonResource.singleton?
+    refute TestSingletonResource._singleton_options.blank?
+    assert_equal :d, TestSingletonResource._singleton_options[:c]
+
+    TestSingletonResource.singleton e: :f
+    assert TestSingletonResource.singleton?
+    refute TestSingletonResource._singleton_options.blank?
+    assert_equal :f, TestSingletonResource._singleton_options[:e]
   end
 end
