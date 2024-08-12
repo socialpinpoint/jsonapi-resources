@@ -55,11 +55,11 @@ class TestApp < Rails::Application
   config.active_record.schema_format = :none
   config.active_support.test_order = :random
 
-  if Rails::VERSION::MAJOR >= 5
+  if ::Rails::VERSION::MAJOR >= 5
     config.active_support.halt_callback_chains_on_return_false = false
     config.active_record.time_zone_aware_types = [:time, :datetime]
     config.active_record.belongs_to_required_by_default = false
-    if Rails::VERSION::MINOR >= 2
+    if ::Rails::VERSION::MINOR >= 2
       config.active_record.sqlite3.represent_boolean_as_integer = true
     end
   end
@@ -78,7 +78,7 @@ module ApiV2Engine
 end
 
 # Monkeypatch ActionController::TestCase to delete the RAW_POST_DATA on subsequent calls in the same test.
-if Rails::VERSION::MAJOR >= 5
+if ::Rails::VERSION::MAJOR >= 5
   module ClearRawPostHeader
     def process(action, *args)
       @request.delete_header 'RAW_POST_DATA'
@@ -93,7 +93,7 @@ end
 
 # Tests are now using the rails 5 format for the http methods. So for rails 4 we will simply convert them back
 # in a standard way.
-if Rails::VERSION::MAJOR < 5
+if ::Rails::VERSION::MAJOR < 5
   module Rails4ActionControllerProcess
     def process(*args)
       if args[2] && args[2][:params]
@@ -125,7 +125,7 @@ end
 
 # Patch to allow :api_json mime type to be treated as JSON
 # Otherwise it is run through `to_query` and empty arrays are dropped.
-if Rails::VERSION::MAJOR >= 5
+if ::Rails::VERSION::MAJOR >= 5
   module ActionController
     class TestRequest < ActionDispatch::TestRequest
       def assign_parameters(routes, controller_path, action, parameters, generated_path, query_string_keys)
@@ -471,7 +471,7 @@ class ActionDispatch::IntegrationTest
   fixtures :all
 
   def assert_jsonapi_response(expected_status, msg = nil)
-    media_type = Rails::VERSION::MAJOR >= 6 ? response.media_type : response.content_type
+    media_type = ::Rails::VERSION::MAJOR >= 6 ? response.media_type : response.content_type
     assert_equal JSONAPI::MEDIA_TYPE, media_type
     if status != expected_status && status >= 400
       pp json_response rescue nil
